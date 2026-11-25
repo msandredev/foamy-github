@@ -1,0 +1,425 @@
+function defaultStatus() {
+  return {
+    ok: true,
+    repoCount: 0,
+    affectedCount: 0,
+    totals: {
+      aheadRepos: 0,
+      behindRepos: 0,
+      dirtyRepos: 0,
+      failedRepos: 0,
+      aheadCommits: 0,
+      behindCommits: 0,
+      dirtyFiles: 0,
+      unavailableRepos: 0
+    },
+    repos: [],
+    sync: {
+      syncing: false,
+      stale: true,
+      lastAttempt: 0,
+      lastSuccess: 0,
+      mode: "",
+      failures: [],
+      updated: [],
+      skipped: []
+    }
+  }
+}
+
+function parseStatus(raw) {
+  if (String(raw || "").length > 8 * 1024 * 1024) return failedStatus("Repository summary is too large. Select fewer repository folders.")
+  var text = String(raw || "").trim()
+  if (text === "") return failedStatus("No repository status received")
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return failedStatus("Invalid repository status")
+    var fallback = defaultStatus()
+    parsed.totals = Object.assign({}, fallback.totals, parsed.totals || {})
+    parsed.repos = Array.isArray(parsed.repos) ? parsed.repos : []
+    if (parsed.repos.length > 256) return failedStatus("Too many repositories. Select fewer repository folders.")
+    for (var repo of parsed.repos) {
+      if (!repo || typeof repo.complete !== "boolean" || typeof repo.affected !== "boolean")
+        return failedStatus("Invalid repository status")
+      if (repo.syncError === undefined) repo.syncError = ""
+      if (repo.usesLfs === undefined) repo.usesLfs = false
+      if (repo.trusted === undefined) repo.trusted = false
+      if (repo.identity === undefined) repo.identity = ""
+      if (typeof repo.usesLfs !== "boolean" || typeof repo.trusted !== "boolean") return failedStatus("Invalid repository status")
+      for (var field of ["path", "name", "owner", "label", "branch", "upstream", "error", "syncError", "identity"]) {
+        if (typeof repo[field] !== "string" || repo[field].length > 4096)
+          return failedStatus("Invalid repository status")
+      }
+      for (var count of ["ahead", "behind", "dirtyCount"]) {
+        if (!Number.isSafeInteger(repo[count]) || repo[count] < 0)
+          return failedStatus("Invalid repository status")
+      }
+    }
+    parsed.sync = Object.assign({}, fallback.sync, parsed.sync || {})
+    parsed.sync.failures = Array.isArray(parsed.sync.failures) ? parsed.sync.failures : []
+    parsed.sync.updated = Array.isArray(parsed.sync.updated) ? parsed.sync.updated : []
+    parsed.sync.skipped = Array.isArray(parsed.sync.skipped) ? parsed.sync.skipped : []
+    return parsed
+  } catch (e) {
+    return failedStatus("Failed to parse repository status")
+  }
+}
+
+function failedStatus(message) {
+  var status = defaultStatus()
+  status.ok = false
+  status.error = message
+  return status
+}
+
+function unavailableStatus(previous, message) {
+  var status = failedStatus(message)
+  // Preserve repository identities for recovery, but never reuse stale safety checks.
+  status.repos = (previous.repos || []).map(function(repo) {
+    return Object.assign({}, repo, {complete: false, affected: true, error: message,
+      ahead: 0, behind: 0, dirty: null, dirtyCount: 0})
+  })
+  status.repoCount = status.repos.length
+  status.affectedCount = status.repos.length
+  status.totals.unavailableRepos = status.repos.length
+  return status
+}
+
+function translate(label, values) {
+  return label.replace(/%([1-9][0-9]*)/g, function(token, index) {
+    return values && Number(index) <= values.length ? String(values[Number(index) - 1]) : token
+  })
+}
+
+function relativeTime(timestampSec, nowMs, tr) {
+  tr = tr || translate
+  var timestamp = Number(timestampSec || 0)
+  if (!isFinite(timestamp) || timestamp <= 0) return tr("Never")
+  var now = nowMs === undefined ? Date.now() : Number(nowMs)
+  var seconds = Math.max(0, Math.floor((now - timestamp * 1000) / 1000))
+  if (seconds < 45) return tr("Just now")
+  var minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return tr("%1m ago", [minutes])
+  var hours = Math.floor(minutes / 60)
+  if (hours < 24) return tr("%1h ago", [hours])
+  var days = Math.floor(hours / 24)
+  return tr("%1d ago", [days])
+}
+
+function plural(key, count) {
+  return translate(key, [count])
+}
+
+// Repositories the popup lists: anything affected locally, plus clean ones
+// whose last fetch failed, so their inline error stays visible.
+function displayedRepos(repos) {
+  return (repos || []).filter(function(repo) {
+    return !!repo && (repo.affected === true || (typeof repo.syncError === "string" && repo.syncError !== ""))
+  })
+}
+
+// Trusted repositories from settings: [{ path, identity }] (absolute path plus
+// the Git directory identity reported by the helper). Bare paths from an
+// earlier build carry no identity and are dropped (untrusted again).
+function trustedRepositories(settings) {
+  var value = settings ? settings.trustedRepositories : undefined
+  var list = value === undefined || value === null ? [] : JSON.parse(JSON.stringify(value))
+  if (!Array.isArray(list)) return []
+  var out = []
+  for (var i = 0; i < list.length && out.length < 256; i++) {
+    var item = list[i]
+    if (item && typeof item === "object" && typeof item.path === "string" && item.path.charAt(0) === "/"
+        && typeof item.identity === "string" && item.identity !== ""
+        && !out.some(function(entry) { return entry.path === item.path }))
+      out.push({ path: item.path, identity: item.identity })
+  }
+  return out
+}
+
+function isTrusted(list, repo) {
+  return !!repo && (list || []).some(function(entry) { return entry.path === repo.path && entry.identity === repo.identity })
+}
+
+// True when trust given as `now` no longer covers something `before`
+// covered: both are the Service's trustArguments ("*" for the old global
+// switch, else the JSON list the helpers get; "" for none). An entry counts
+// as gone when its path or identity is no longer listed.
+function trustRevoked(before, now) {
+  if (now === "*" || before === now || !before) return false
+  if (before === "*") return true
+  var parse = function(text) {
+    try { var list = JSON.parse(text); return Array.isArray(list) ? list : [] } catch (error) { return [] }
+  }
+  var kept = parse(now)
+  return parse(before).some(function(entry) { return !isTrusted(kept, entry) })
+}
+
+// The list a trust edit must start from: the newest queued save of
+// trustedRepositories if one waits behind an in-flight save, else the
+// effective settings (saved + in flight). Composing over anything older
+// would undo an earlier queued edit (untrust B, then C, restoring B).
+function trustBase(effectiveSettings, waiting) {
+  var queued = (waiting || []).filter(function(item) { return item && item.key === "trustedRepositories" })
+  return queued.length > 0 ? trustedRepositories({ trustedRepositories: queued[queued.length - 1].value })
+    : trustedRepositories(effectiveSettings)
+}
+
+// What a fetch helper run means: "busy", "done" (with failures) or "error".
+// A non-zero exit without a structured result is an error (stderr), never
+// "Fetch complete".
+function fetchOutcome(exitCode, stdout, stderr) {
+  var result = null
+  try { result = JSON.parse(String(stdout || "")) } catch (e) {}
+  var structured = !!result && typeof result === "object" && !Array.isArray(result)
+    && (result.busy === true || (typeof result.ok === "boolean" && Array.isArray(result.failures)))
+  if (structured && result.busy === true) return { status: "busy", message: String(result.message || ""), failed: 0 }
+  if (structured) return { status: "done", message: "", failed: result.failures.length }
+  var detail = String(stderr || "").trim().slice(0, 240)
+  return { status: "error", message: detail || "Repository synchronization failed", failed: 0, exitCode: exitCode }
+}
+
+// The trusted list with `repo` (its path and identity) added or removed.
+function withTrust(list, repo, trusted) {
+  var out = (list || []).filter(function(entry) { return entry.path !== repo.path })
+  if (trusted && repo.identity) out.push({ path: String(repo.path), identity: String(repo.identity) })
+  return out
+}
+
+// A pull the row's button (and Pull all) offers: behind its upstream with a
+// clean working tree and nothing of its own to push, so it fast-forwards.
+function canPull(repo) {
+  return !!repo && repo.complete === true && repo.behind > 0 && repo.dirtyCount === 0 && repo.ahead === 0
+}
+
+function pullableRepos(repos) {
+  return (repos || []).filter(canPull)
+}
+
+// Repositories Settings → Git LFS lists, by label: only those that use Git
+// LFS. Trust records of other repositories (one that stopped using LFS, or
+// isn't found) are kept as they are, never pruned; they just aren't listed.
+function lfsRepos(repos) {
+  return (repos || []).filter(function(repo) { return !!repo && repo.usesLfs === true })
+    .sort(function(a, b) { return String(a.label).toLowerCase() < String(b.label).toLowerCase() ? -1 : 1 })
+}
+
+// Validation for the trustedRepositories setting.
+function validTrustedList(value) {
+  if (!Array.isArray(value) || value.length > 256) return "Use at most 256 trusted repositories."
+  for (var i = 0; i < value.length; i++) {
+    var item = value[i]
+    if (!item || typeof item.path !== "string" || item.path.charAt(0) !== "/" || item.path.length > 4096
+        || typeof item.identity !== "string" || item.identity === "" || item.identity.length > 128)
+      return "Trusted repositories must be absolute paths."
+  }
+  return true
+}
+
+// The inline fetch error after a row's status line ("main · 3 changed · …").
+function syncErrorText(repo, tr) {
+  tr = tr || translate
+  return repo && repo.syncError ? tr(String(repo.syncError)) : ""
+}
+
+function repositoryMeta(repo, tr, tn) {
+  tr = tr || translate
+  tn = tn || plural
+  if (!repo) return ""
+  if (repo.complete === false) return tr("Status unavailable") + " · " + String(repo.error || "")
+  var parts = []
+  var branch = String(repo.branch || tr("detached"))
+  parts.push(branch)
+  if (repo.ahead > 0) parts.push("↑" + tn("%1 commits", repo.ahead))
+  if (repo.behind > 0) parts.push("↓" + tn("%1 commits", repo.behind))
+  if (repo.dirtyCount > 0) parts.push(tr("%1 changed", [repo.dirtyCount]))
+  return parts.join(" · ")
+}
+
+// Filesystem watcher retry: 30 s, doubling to 30 min while it keeps failing
+// soon after starting; a run that lasted 10 min starts over at 30 s.
+var WATCH_RETRY_MIN_MS = 30 * 1000
+var WATCH_RETRY_MAX_MS = 30 * 60 * 1000
+var WATCH_STABLE_MS = 10 * 60 * 1000
+
+function watchRetry(currentMs, ranMs) {
+  var delay = Number(ranMs) >= WATCH_STABLE_MS ? WATCH_RETRY_MIN_MS
+    : Math.max(WATCH_RETRY_MIN_MS, Math.min(WATCH_RETRY_MAX_MS, Number(currentMs) || WATCH_RETRY_MIN_MS))
+  return { delay: delay, next: Math.min(WATCH_RETRY_MAX_MS, delay * 2) }
+}
+
+function defaultGithub() {
+  return { ok: true, error: "", repos: [], lastChecked: 0 }
+}
+
+function normalizeCloneDirectory(path, home) {
+  var text = String(path || "~/repos").trim()
+  if (text === "") text = "~/repos"
+  if (text.charAt(0) === "~") text = String(home || "") + text.slice(1)
+  text = text.replace(/\/+$/, "")
+  return text.charAt(0) === "/" ? text : (String(home || "") + "/repos")
+}
+
+function parseGithubRepos(raw) {
+  if (String(raw || "").length > 8 * 1024 * 1024) return { ok: false, error: "GitHub repository list is too large.", repos: [] }
+  var text = String(raw || "").trim()
+  if (text === "") return { ok: false, error: "No GitHub repository data received.", repos: [] }
+  try {
+    var parsed = JSON.parse(text)
+    if (!Array.isArray(parsed)) return { ok: false, error: "Invalid GitHub repository data.", repos: [] }
+    if (parsed.length > 200) return { ok: false, error: "Too many GitHub repositories.", repos: [] }
+    var repos = []
+    for (var i = 0; i < parsed.length; i++) {
+      var item = parsed[i]
+      if (!item || typeof item !== "object") return { ok: false, error: "Invalid GitHub repository data.", repos: [] }
+      var nameWithOwner = String(item.nameWithOwner || "")
+      var parts = nameWithOwner.split("/")
+      var owner = parts.length === 2 ? parts[0] : String((item.owner && item.owner.login) || "")
+      var name = parts.length === 2 ? parts[1] : String(item.name || "")
+      if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(name))
+        return { ok: false, error: "Invalid GitHub repository name.", repos: [] }
+      var url = String(item.url || "")
+      var sshUrl = String(item.sshUrl || "")
+      if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(url))
+        return { ok: false, error: "Invalid GitHub repository URL.", repos: [] }
+      if (sshUrl !== "" && !/^git@github\.com:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(sshUrl))
+        return { ok: false, error: "Invalid GitHub SSH URL.", repos: [] }
+      repos.push({
+        nameWithOwner: owner + "/" + name,
+        owner: owner,
+        name: name,
+        description: String(item.description || "").slice(0, 300),
+        url: url,
+        sshUrl: sshUrl,
+        isPrivate: item.isPrivate === true,
+        isFork: item.isFork === true,
+        isArchived: item.isArchived === true,
+        pushedAt: String(item.pushedAt || ""),
+        viewerCanPush: item.viewerCanPush !== false
+      })
+    }
+    return { ok: true, error: "", repos: repos }
+  } catch (e) {
+    return { ok: false, error: "Failed to parse GitHub repository data.", repos: [] }
+  }
+}
+
+function githubClonePath(cloneDirectory, repo, home) {
+  var base = normalizeCloneDirectory(cloneDirectory, home || (typeof Quickshell !== "undefined" && Quickshell.env ? Quickshell.env("HOME") : ""))
+  if (!repo || !/^[A-Za-z0-9_.-]+$/.test(String(repo.owner || "")) || !/^[A-Za-z0-9_.-]+$/.test(String(repo.name || ""))) return ""
+  return base + "/" + repo.owner + "/" + repo.name
+}
+
+function localRepoForRemote(remoteRepo, localRepos, cloneDirectory, home) {
+  var remote = String(remoteRepo.nameWithOwner || "").toLowerCase()
+  var expected = githubClonePath(cloneDirectory, remoteRepo, home)
+  var repos = localRepos || []
+  for (var i = 0; i < repos.length; i++) {
+    var repo = repos[i]
+    var label = String(repo.label || "").toLowerCase()
+    var path = String(repo.path || "")
+    if (path !== "" && path === expected) return repo
+    if (label === remote || (label.length > remote.length && label.endsWith("/" + remote))) return repo
+  }
+  return null
+}
+
+function githubRows(remoteRepos, localRepos, cloneDirectory, home) {
+  var rows = []
+  var remotes = remoteRepos || []
+  for (var i = 0; i < remotes.length; i++) {
+    var remote = remotes[i]
+    var local = localRepoForRemote(remote, localRepos, cloneDirectory, home)
+    rows.push({
+      kind: "github",
+      remote: remote,
+      local: local,
+      clonePath: githubClonePath(cloneDirectory, remote, home)
+    })
+  }
+  return rows
+}
+
+function repositoryFolders(settings) {
+  var value = settings ? settings.repositoryFolders : undefined
+  // Omarchy can provide a QML sequence wrapper rather than a JavaScript array.
+  return value === undefined ? [] : JSON.parse(JSON.stringify(value))
+}
+
+function parseFolderRows(rows) {
+  // Since Qt 6.12 a list passed through a QML `var` signal argument (the
+  // view's foldersEdited) arrives as a sequence wrapper, not an Array.
+  if (rows && typeof rows === "object" && !Array.isArray(rows) && typeof rows.length === "number")
+    rows = Array.prototype.slice.call(rows)
+  if (!Array.isArray(rows) || rows.length > 32) return { error: "Use at most 32 repository folders." }
+  var folders = []
+  for (var i = 0; i < rows.length; i++) {
+    // Existing string settings retain their original two-level scan.
+    var row = typeof rows[i] === "string" ? {path: rows[i], depth: 2} : rows[i]
+    if (!row || typeof row.path !== "string" || !/^(\/|~(?:\/|$))/.test(row.path.trim()))
+      return { error: "Use an absolute path or ~/ for every folder." }
+    if (!Number.isInteger(row.depth) || row.depth < 0 || row.depth > 5)
+      return { error: "Choose a scan depth from 0 to 5 levels." }
+    var path = row.path.trim()
+    var existing = folders.find(function(folder) { return folder.path === path })
+    if (existing) existing.depth = Math.max(existing.depth, row.depth)
+    else folders.push({path: path, depth: row.depth})
+  }
+  return { folders: folders, error: "" }
+}
+
+// Schema fields of the two list settings, validated here (Preferences.js
+// holds the others; Service.fields joins them).
+var listFields = [{
+  key: "trustedRepositories", type: "array", maxItems: 256, defaultValue: [],
+  validate: function(value) { return validTrustedList(value) }
+}, {
+  key: "repositoryFolders", type: "array", maxItems: 32, defaultValue: [],
+  validate: function(value) { var parsed = parseFolderRows(value); return parsed.error ? parsed.error : true }
+}]
+
+// The helper's `pick-folder` reply (the last stdout line): {path} for a
+// choice, {cancelled: true}, or {error: code} (the helper's code, or
+// PORTAL_FAILED when the timeout backstop stopped it, else FAILED). Exit
+// codes 126/127 (no helper for this CPU) are the caller's to check first.
+function folderPickReply(exitCode, stdout) {
+  var data = null
+  try { data = JSON.parse(String(stdout || "").trim().split("\n").pop()) } catch (error) { data = null }
+  if (exitCode === 0 && data && data.ok === true && data.cancelled === true) return { cancelled: true }
+  if (exitCode === 0 && data && data.ok === true && typeof data.path === "string" && data.path.charAt(0) === "/")
+    return { path: data.path }
+  if (exitCode === 124 || exitCode === 137) return { error: "PORTAL_FAILED" }
+  return { error: data && typeof data.code === "string" && /^[A-Z_]{1,40}$/.test(data.code) ? data.code : "FAILED" }
+}
+
+if (typeof module !== "undefined") {
+  module.exports = {
+    folderPickReply: folderPickReply,
+    repositoryFolders: repositoryFolders,
+    parseFolderRows: parseFolderRows,
+    listFields: listFields,
+    defaultStatus: defaultStatus,
+    parseStatus: parseStatus,
+    unavailableStatus: unavailableStatus,
+    relativeTime: relativeTime,
+    repositoryMeta: repositoryMeta,
+    watchRetry: watchRetry,
+    displayedRepos: displayedRepos,
+    canPull: canPull,
+    pullableRepos: pullableRepos,
+    trustedRepositories: trustedRepositories,
+    withTrust: withTrust,
+    isTrusted: isTrusted,
+    trustRevoked: trustRevoked,
+    trustBase: trustBase,
+    fetchOutcome: fetchOutcome,
+    lfsRepos: lfsRepos,
+    validTrustedList: validTrustedList,
+    syncErrorText: syncErrorText,
+    defaultGithub: defaultGithub,
+    normalizeCloneDirectory: normalizeCloneDirectory,
+    parseGithubRepos: parseGithubRepos,
+    githubClonePath: githubClonePath,
+    localRepoForRemote: localRepoForRemote,
+    githubRows: githubRows
+  }
+}

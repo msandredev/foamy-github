@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "id": "msandredev.github",
+  "name": "GitHub",
+  "version": "1.4.0",
+  "author": "foamrider",
+  "description": "GitHub repositories via gh plus local Git status, clone, fetch, pull, and push actions.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "GitHub",
+    "description": "Browse GitHub repos, clone them, and manage local repo status.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30,
+      "fetchIntervalSec": 900,
+      "repositoryFolders": [],
+      "inotifyEnabled": true,
+      "trustedRepositories": [],
+      "githubEnabled": true,
+      "githubRefreshMinutes": 5,
+      "githubLimit": 100,
+      "cloneDirectory": "~/repos"
+    },
+    "schema": [
+      {
+        "key": "githubEnabled",
+        "type": "boolean",
+        "label": "Show GitHub repositories",
+        "defaultValue": true
+      },
+      {
+        "key": "githubRefreshMinutes",
+        "type": "integer",
+        "label": "Refresh GitHub repositories every (minutes)",
+        "min": 1,
+        "max": 120,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "githubLimit",
+        "type": "integer",
+        "label": "GitHub repositories to load",
+        "min": 1,
+        "max": 200,
+        "step": 1,
+        "defaultValue": 100
+      },
+      {
+        "key": "cloneDirectory",
+        "type": "string",
+        "label": "Clone directory",
+        "minLength": 1,
+        "maxLength": 4096,
+        "defaultValue": "~/repos"
+      },
+      {
+        "key": "inotifyEnabled",
+        "type": "boolean",
+        "label": "Detect local changes automatically",
+        "defaultValue": true
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh local status every (seconds; 0 turns polling off)",
+        "min": 0,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "fetchIntervalSec",
+        "type": "integer",
+        "label": "Fetch local remotes every (seconds)",
+        "min": 300,
+        "max": 86400,
+        "step": 300,
+        "defaultValue": 900
+      }
+    ]
+  },
+  "license": "MIT"
+}

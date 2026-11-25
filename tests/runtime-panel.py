@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Load the real Panel.qml three times (one bar per monitor) in an isolated
+offscreen Quickshell against a host shell, through foamy-kit's harness.
+
+  python3 tests/runtime-panel.py
+
+Checks: it loads without errors; one Service and one leader for three
+instances; the popup body builds on open with the GithubView; the inline
+error row renders; Refresh sits in the footer, after Pull all and Settings
+in the cursor order; the watcher helper runs (temp HOME, no folders, no network
+beyond what Git would do for zero repositories); IPC status answers from the
+leader. Requires ~/GitHub/Personal/foamy-kit (or FOAMY_KIT).
+
+Runs on Omarchy 4.5: the installed /usr/share/omarchy/shell, or the tree in
+FOAMY_HOST_45."""
+
+import os
+import sys
+from pathlib import Path
+
+KIT = Path(os.environ.get("FOAMY_KIT", Path.home() / "GitHub/Personal/foamy-kit"))
+sys.path.insert(0, str(KIT / "preview"))
+import harness  # noqa: E402
+
+
+PLUGIN = Path(__file__).resolve().parents[1]
+SHELL = r"""
+import QtQuick
+import Quickshell
+import "harness"
+import "plugin/kit" as Kit
+import "plugin" as Plugin
+
+ShellRoot {
+  id: shell
+  property var panels: []
+  property int checks: 0
+  function check(ok, what) { checks++; if (!ok) console.log("FOAMY FAIL " + what) }
+  function collect(item, test, out) {
+    out = out || []
+    if (!item) return out
+    if (test(item)) out.push(item)
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) collect(kids[i], test, out)
+    return out
+  }
+
+  FloatingWindow {
+    implicitWidth: 1920; implicitHeight: 1080
+    Item { id: host; width: 1920; height: 1080 }
+  }
+  Component { id: barComponent; MockBar { barSize: 34 } }
+
+  Component.onCompleted: {
+    var component = Qt.createComponent(Qt.resolvedUrl("plugin/Panel.qml"))
+    if (component.status !== Component.Ready) { console.log("FOAMY FAIL load " + component.errorString()); Qt.quit(); return }
+    for (var i = 0; i < 3; i++) {
+      var bar = barComponent.createObject(shell, { moduleName: "foamy.github" })
+      panels.push(component.createObject(host, { bar: bar, x: 1500, y: 0, width: 40, height: 34,
+        settings: { repositoryFolders: [], inotifyEnabled: @INOTIFY@, refreshIntervalSec: 30, fetchIntervalSec: 900,
+                    trustRepositoryConfig: true,
+                    trustedRepositories: [{ path: "/r/a", identity: "1:1:1|2:2:2" }, { path: "/r/b", identity: "3:3:3|4:4:4" }] } }))
+    }
+    step.next()
+  }
+
+  // Each step runs once the state the previous one started has arrived (a
+  // condition, not a fixed delay); a step that never becomes ready fails.
+  FoamyWait { id: wait }
+  readonly property var ready: [
+    function() { return Kit.FoamyShared.memberCount("github") === 3 && Plugin.Service.active
+      && Plugin.Service.settings.fetchIntervalSec === 900 },
+    // The first complete scan arrived and the legacy trust was migrated.
+    function() {
+      var saves = panels[0].bar.saved
+      return panels[1].popup.bodyItem !== null && Plugin.Service.lastChecked > 0
+        && saves.length > 0 && saves[saves.length - 1].settings.trustRepositoryConfig === false
+    },
+    function() { return panels[1].editingSettings && !panels[1].prefs.busy },
+    // Both identity checks ended; the destroyed leader left.
+    function() {
+      return JSON.stringify(panels[1].bar.saved).indexOf("@IDENT@") >= 0
+        && panels[2].settingsError !== "" && Kit.FoamyShared.memberCount("github") === 2
+    },
+    function() { return !Plugin.Service.active }
+  ]
+  QtObject {
+    id: step
+    property int n: 0
+    function next() { wait.waitFor(shell.ready[n], 20000, run, "step " + n + " ready") }
+    function run() {
+      if (n === 0) {
+        check(Kit.FoamyShared.memberCount("github") === 3, "three members")
+        check(Plugin.Service.active, "service active")
+        check(Plugin.Service.settings.fetchIntervalSec === 900, "leader fed settings")
+        // The service reads every setting through the schema: a hand-edited
+        // value out of range or of the wrong type is the default (no clamp),
+        // and 0 keeps timed refresh off.
+        var fed = JSON.parse(JSON.stringify(Plugin.Service.settings))
+        check(Plugin.Service.refreshIntervalSec === 30 && Plugin.Service.legacyTrustAll
+          && Plugin.Service.trustedRepositories.length === 2, "service reads the fed settings")
+        Plugin.Service.settings = { inotifyEnabled: @INOTIFY@, refreshIntervalSec: 5000, fetchIntervalSec: 60,
+          repositoryFolders: [{ path: "relative", depth: 2 }], trustRepositoryConfig: true, trustedRepositories: "x" }
+        check(Plugin.Service.refreshIntervalSec === 30 && Plugin.Service.fetchIntervalSec === 900, "out-of-range intervals read as the default")
+        check(Plugin.Service.folderArguments === "[]" && Plugin.Service.trustedRepositories.length === 0, "invalid lists read as the default")
+        Plugin.Service.settings = Object.assign({}, fed, { refreshIntervalSec: 5 })
+        check(Plugin.Service.refreshIntervalSec === 5, "an in-range interval runs as saved")
+        Plugin.Service.settings = Object.assign({}, fed, { refreshIntervalSec: 0 })
+        check(Plugin.Service.refreshIntervalSec === 0, "0 keeps timed refresh off")
+        Plugin.Service.settings = fed
+        panels[1].open()
+      } else if (n === 1) {
+        var view = panels[1].popup.bodyItem
+        check(view !== null && view.service === Plugin.Service, "body built on open")
+        check(panels[0].popup.bodyItem === null, "other monitors stay lazy")
+        check(Plugin.Service.lastChecked > 0 || Plugin.Service.refreshing, "status arrived from the watcher")
+        // Refresh lives in the footer (count, freshness, refresh), not in the
+        // header (which holds Pull all, only while something can be pulled);
+        // the cursor walks rows, then Pull all (when shown), Settings and Refresh.
+        var footers = collect(view, function(item) { return item.objectName === "githubFooter" })
+        check(footers.length === 1 && footers[0].showRefresh && footers[0].refreshButton.objectName === "foamyFooterRefresh", "footer with refresh")
+        check(footers.length === 1 && footers[0].source === "0 repositories", "footer leads with the repository count")
+        var bands = collect(view, function(item) { return item.trailing !== undefined && item.settingsHasCursor !== undefined })
+        check(bands.length > 0 && bands.every(function(band) {
+          return collect(band, function(item) { return item.iconName === "refresh-cw" }).length === 0
+        }), "no refresh in the header")
+        var pullAll = collect(view, function(item) { return item.objectName === "pullAllAction" })
+        check(pullAll.length === 1 && pullAll[0].iconName === "arrow-down-to-line", "Pull all in the header")
+        check(view.pullableCount === 0 && !view.showPullAll && !pullAll[0].visible, "Pull all hidden with nothing to pull")
+        check(view.pullAllStop === -1 && view.settingsStop === view.stops.count
+          && view.refreshStop === view.settingsStop + 1, "cursor without Pull all: rows, Settings, Refresh")
+        // Legacy global trust migrates once after the first complete scan, in
+        // both live-monitoring and timed-polling mode.
+        var leaderSaves = panels[0].bar.saved
+        check(leaderSaves.length > 0 && leaderSaves[leaderSaves.length - 1].settings.trustRepositoryConfig === false,
+              "legacy trust migrated (" + (Plugin.Service.inotifyEnabled ? "live monitoring" : "polling") + ")")
+        panels[1].openSettings()
+      } else if (n === 2) {
+        check(panels[1].editingSettings, "settings open")
+        var view1 = panels[1].popup.bodyItem
+        view1.settingsErrorReported("Clipboard too large")
+        check(view1.settingsError === "Clipboard too large", "paste error reaches the view through the Panel")
+        panels[1].settingsError = ""
+        check(view1.settingsError === "", "settingsError binding survives a paste error")
+        var bar1 = panels[1].bar
+        panels[1].save("fetchIntervalSec", 300)
+        panels[1].save("fetchIntervalSec", 1800)
+        check(panels[1].prefs.value("fetchIntervalSec") === 1800, "newest edit wins through FoamyPrefsQueue")
+        check(bar1.saved.length > 0 && bar1.saved[bar1.saved.length - 1].settings.fetchIntervalSec === 1800, "saved inline")
+        panels[1].saveFolders([{ path: "relative", depth: 2 }])
+        check(view1.settingsError !== "", "invalid folders are reported, not saved")
+        panels[1].saveFolders([{ path: "~/GitHub", depth: 3 }])
+        check(JSON.stringify(bar1.saved[bar1.saved.length - 1].settings.repositoryFolders) === JSON.stringify([{ path: "~/GitHub", depth: 3 }]), "folders saved as an array")
+        check(Plugin.Service.helperArguments().indexOf(Plugin.Service.legacyTrustAll ? "--trust-repository-config" : "--trusted-json") >= 0, "helpers get the trust arguments")
+        check(view1.lfsRepositories.length === 0, "no Git LFS section without LFS repositories")
+        // Trust edits queued behind an in-flight save compose (Codex: the
+        // second edit used to undo the first): untrust A, then B.
+        var prefs1 = panels[1].prefs
+        prefs1.inFlight = true
+        panels[1].setTrusted({ path: "/r/a", identity: "1:1:1|2:2:2" }, false)
+        panels[1].setTrusted({ path: "/r/b", identity: "3:3:3|4:4:4" }, false)
+        var queued = prefs1.waiting.filter(function(item) { return item.key === "trustedRepositories" })
+        check(queued.length === 1 && queued[0].value.length === 0, "queued trust edits compose")
+        prefs1.waiting = []
+        prefs1.inFlight = false
+        // Trusting re-verifies the identity from a fresh pin before saving:
+        // the real repository's identity is saved, a stale one refused.
+        panels[1].setTrusted({ path: "@REPO@", identity: "@IDENT@" }, true)
+        panels[2].setTrusted({ path: "@REPO@", identity: "9:9:9|9:9:9" }, true)
+        panels[1].close()
+        panels[0].destroy()
+      } else if (n === 3) {
+        var saved1 = panels[1].bar.saved
+        check(saved1.length > 0 && JSON.stringify(saved1[saved1.length - 1].settings.trustedRepositories).indexOf("@IDENT@") >= 0,
+              "trust saved after re-verifying the identity")
+        check(panels[2].settingsError === "Repository changed; refresh and try again.", "a changed repository is refused")
+        check(!panels[2].bar.saved.some(function(entry) { return JSON.stringify(entry.settings.trustedRepositories || []).indexOf("9:9:9") >= 0 }),
+              "nothing saved for a changed repository")
+        check(!panels[1].opened && !panels[1].editingSettings, "settings reset when the popup closes")
+        panels[1].openSettings()
+        check(panels[1].opened && panels[1].editingSettings, "openSettings() on a closed popup lands on Settings")
+        panels[1].returningFromBrowser = true
+        panels[1].close()
+        check(panels[1].editingSettings, "folder browser round trip keeps Settings")
+        panels[1].returningFromBrowser = false
+        panels[1].close()
+
+        check(Kit.FoamyShared.memberCount("github") === 2, "leader left")
+        check(Plugin.Service.active, "service still active after re-election")
+        panels[1].destroy(); panels[2].destroy()
+      } else {
+        check(!Plugin.Service.active, "service stops with the last bar")
+        console.log("FOAMY CHECKS " + checks)
+        console.log("FOAMY DONE")
+        Qt.quit()
+        return
+      }
+      n++
+      next()
+    }
+  }
+}
+"""
+
+status = 0
+import subprocess
+import tempfile
+
+sys.path.insert(0, str(PLUGIN / "tests"))
+from blackbox import command  # noqa: E402  (FOAMY_HELPER, as in the unit tests)
+
+TRUST_REPO = tempfile.mkdtemp(prefix="foamy-github-runtime-repo-")
+import atexit, shutil  # noqa: E401
+
+atexit.register(shutil.rmtree, TRUST_REPO, True)
+subprocess.run(["git", "init", "-q", TRUST_REPO], check=True)
+TRUST_IDENTITY = subprocess.run(
+    command("identity", TRUST_REPO), capture_output=True, text=True, check=True
+).stdout.strip()
+SHELL = SHELL.replace("@REPO@", TRUST_REPO).replace("@IDENT@", TRUST_IDENTITY)
+
+for host in harness.available_hosts(what="runtime-panel"):
+    for mode in ("true", "false"):  # inotifyEnabled: live monitoring, then timed polling
+        run = harness.Run(
+            host, SHELL.replace("@INOTIFY@", mode), plugin=PLUGIN, prefix=f"foamy-github-runtime-{host}-"
+        ).run(timeout=60)
+        checks = [line for line in run.log.splitlines() if "FOAMY CHECKS" in line]
+        # Any QML warning from the plugin's own files fails the run too.
+        warnings = [
+            line
+            for line in run.log.splitlines()
+            if "WARN" in line and "/plugin/" in line and "/plugin/kit/" not in line
+        ]
+        if warnings:
+            run.ok = False
+            print("\n".join(warnings))
+        # The isolated harness stubs every omarchy command; none may run.
+        if run.host_commands():
+            run.ok = False
+            print("host commands ran:", *run.host_commands(), sep="\n  ")
+
+        if run.ok:
+            print(
+                f"{host} ({'live monitoring' if mode == 'true' else 'polling'}): runtime passed ({checks[0].split('FOAMY CHECKS')[1].strip() if checks else '?'} checks)"
+            )
+            run.cleanup()
+        else:
+            status = 1
+            print(
+                f"{host} ({'live monitoring' if mode == 'true' else 'polling'}): runtime FAILED; log at {run.base}/qs.log"
+            )
+            print("\n".join(run.failures() or run.log.splitlines()[-30:]))
+sys.exit(status)

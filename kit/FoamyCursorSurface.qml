@@ -1,0 +1,36 @@
+// foamy-kit 0.9.0 7729ead2825fe4300b9756b8be28debb9767b042500cacbd46e73249195e1c5c — do not edit; change foamy-kit and run sync
+import QtQuick
+import qs.Ui
+
+// A row or tile in the panel's single keyboard cursor model: the stock
+// CursorSurface (one highlight for keyboard and pointer, theme state fills)
+// with the foamy radius. Paint from `hasCursor`/`current`, never from
+// containsMouse; route hover back to the panel cursor with `hovered`.
+//
+//   FoamyCursorSurface {
+//     hasCursor: cursor.at(index)
+//     onHovered: cursor.hover(index)
+//     onClicked: root.activate(index)
+//   }
+//
+// The pointer shows a hand over the row; set cursorShape (e.g.
+// Qt.ArrowCursor) for rows that do nothing on click.
+CursorSurface {
+  id: root
+
+  signal hovered
+  signal clicked
+
+  property int cursorShape: Qt.PointingHandCursor
+
+  radius: FoamyStyle.radius
+
+  HoverHandler {
+    cursorShape: root.cursorShape
+    onHoveredChanged: if (hovered)
+      root.hovered()
+  }
+  TapHandler {
+    onTapped: root.clicked()
+  }
+}

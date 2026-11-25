@@ -1,0 +1,91 @@
+const I18n = require('./i18n.cjs');
+const assert = require('node:assert/strict')
+const test = require('node:test')
+const Model = require('../Model.js')
+const manifest = require('../manifest.json')
+const Schema = require('../Preferences.js')
+const Prefs = require('../kit/node-loader.cjs').load('FoamyPrefs')
+const fields = Schema.fields.concat(Model.listFields)
+// The kit runs in its own vm context: copy its values into this realm.
+const plain = value => value === undefined ? value : JSON.parse(JSON.stringify(value))
+const nb = (label, values) => I18n.text(label, 'nb', values)
+const nbn = (label, count) => I18n.plural(label, count, 'nb')
+const enn = (label, count) => I18n.plural(label, count, 'en')
+
+test('labels translate without changing unknown diagnostics or substituted repository names', () => {
+  assert.equal(nb('Settings'), 'Innstillinger')
+  assert.equal(I18n.text('Language', 'en'), 'Language')
+  assert.equal(nb('fatal: origin is unavailable'), 'fatal: origin is unavailable')
+  assert.equal(nb('constructor'), 'constructor')
+  assert.equal(nb('Push %1', ['my-%1-$&-repo']), 'Send my-%1-$&-repo')
+  assert.equal(nbn('%1 levels', 1), '1 nivå')
+  assert.equal(nbn('%1 levels', 5), '5 nivåer')
+  assert.equal(enn('%1 repositories', 1), '1 repository')
+  assert.match(nb(Model.parseFolderRows([{path:'relative', depth:2}]).error), /absolutt sti/)
+})
+
+test('repository metadata and timestamps use the selected language and keep English defaults', () => {
+  const repo = {branch:'feature/%1', ahead:1, behind:2, dirtyCount:3}
+  assert.equal(Model.repositoryMeta(repo, undefined, enn), 'feature/%1 · ↑1 commit · ↓2 commits · 3 changed')
+  assert.equal(Model.repositoryMeta(repo, nb, nbn), 'feature/%1 · ↑1 innsending · ↓2 innsendinger · 3 endret')
+  assert.equal(Model.relativeTime(0, 1000000, nb), 'Aldri')
+  assert.equal(Model.relativeTime(1000, 1000000, nb), 'Akkurat nå')
+  assert.equal(Model.relativeTime(940, 1000000, nb), 'for 1 min siden')
+  assert.equal(Model.relativeTime(940, 1000000), '1m ago')
+  assert.equal(Model.relativeTime(1, 7201000, nb), 'for 2 t siden')
+  assert.equal(Model.relativeTime(1, 172801000, nb), 'for 2 d siden')
+})
+
+test('fetch errors render inline after the status line and translate', () => {
+  const repo = {branch:'main', ahead:0, behind:0, dirtyCount:10, complete:true,
+    syncError:'No origin remote configured. Add one in lazygit, then refresh.'}
+  assert.equal(Model.repositoryMeta(repo, undefined, enn), 'main · 10 changed')
+  assert.equal(Model.syncErrorText(repo), 'No origin remote configured. Add one in lazygit, then refresh.')
+  assert.notEqual(Model.syncErrorText(repo, nb), repo.syncError)
+  assert.equal(Model.syncErrorText({...repo, syncError:''}), '')
+})
+
+test('every catalog plural has one and other forms, and Norwegian covers every English key', () => {
+  for (const [key, value] of Object.entries(I18n.en)) {
+    if (typeof value === 'object') assert.deepEqual(Object.keys(value).sort(), ['one', 'other'], key)
+    assert.ok(Object.hasOwn(I18n.no, key), `missing Norwegian: ${key}`)
+  }
+})
+
+test('the schema mirrors the manifest schema and defaults', () => {
+  for (const entry of manifest.barWidget.schema) {
+    const field = fields.find(f => f.key === entry.key)
+    assert.ok(field, entry.key)
+    for (const prop of ['type', 'min', 'max', 'step', 'defaultValue']) assert.equal(field[prop], entry[prop], `${entry.key}.${prop}`)
+  }
+  for (const [key, value] of Object.entries(manifest.barWidget.defaults))
+    assert.deepEqual(plain(Prefs.value(fields, {}, key)), value, key)
+})
+
+test('the service reads settings through the schema: an invalid value is the default, 0 turns refresh off', () => {
+  const read = settings => plain(Prefs.values(fields, settings))
+  assert.deepEqual(read({}), {inotifyEnabled:true, refreshIntervalSec:30, fetchIntervalSec:900,
+    trustRepositoryConfig:false, trustedRepositories:[], repositoryFolders:[]})
+  assert.equal(read({refreshIntervalSec:0}).refreshIntervalSec, 0)
+  assert.equal(read({refreshIntervalSec:5}).refreshIntervalSec, 5)
+  assert.equal(read({refreshIntervalSec:3600}).refreshIntervalSec, 3600)
+  // Out of range or the wrong type reads as the default, never a clamp.
+  for (const value of [-1, 3601, 30.5, '60', null, true]) assert.equal(read({refreshIntervalSec:value}).refreshIntervalSec, 30, String(value))
+  for (const value of [0, 299, 86401, '900']) assert.equal(read({fetchIntervalSec:value}).fetchIntervalSec, 900, String(value))
+  assert.equal(read({inotifyEnabled:false}).inotifyEnabled, false)
+  assert.equal(read({inotifyEnabled:'false'}).inotifyEnabled, true)
+  assert.equal(read({trustRepositoryConfig:true}).trustRepositoryConfig, true)
+  assert.equal(read({trustRepositoryConfig:'true'}).trustRepositoryConfig, false)
+})
+
+test('repository folders and trusted repositories reach the helpers only when valid', () => {
+  const read = (key, value) => plain(Prefs.value(fields, {[key]: value}, key))
+  const folders = [{path:'~/GitHub', depth:3}, '/srv/legacy']
+  assert.deepEqual(read('repositoryFolders', folders), folders)
+  for (const value of [[{path:'relative', depth:2}], [{path:'/tmp', depth:6}], Array(33).fill('/tmp'), '~/GitHub', {}])
+    assert.deepEqual(read('repositoryFolders', value), [], JSON.stringify(value))
+  const trusted = [{path:'/r/a', identity:'1:1:1|2:2:2'}]
+  assert.deepEqual(read('trustedRepositories', trusted), trusted)
+  for (const value of [['/r/a'], [{path:'r/a', identity:'1:1:1'}], [{path:'/r/a', identity:''}], 'x'])
+    assert.deepEqual(read('trustedRepositories', value), [], JSON.stringify(value))
+})
