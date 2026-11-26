@@ -5,6 +5,7 @@ import Quickshell.Io
 import Quickshell.Networking
 import "kit"
 import "Model.js" as Model
+import "GithubStats.js" as GithubStats
 import "Preferences.js" as Schema
 import "kit/FoamyPrefs.js" as Prefs
 import "kit/FoamyNative.js" as FoamyNative
@@ -42,13 +43,25 @@ Item {
   property string githubError: ""
   property string githubActionStatus: ""
   property var githubStats: ({ repoCount: 0, openPRs: 0, openIssues: 0 })
+  // Zeros are not an answer until a GraphQL reply has actually been accepted.
+  property bool githubStatsValid: false
+  property string githubStatsError: ""
   property bool githubStatsRefreshing: false
   property var githubActivity: ({ calendar: null, weekly: null, login: "" })
   property bool githubActivityRefreshing: false
+  // Each process is tied to the request that started it, so a late exit from a
+  // cancelled or timed-out child cannot complete the next request.
+  property int githubOperationId: 0
+  property int githubStatsOperationId: 0
   readonly property string homeDir: Quickshell.env("HOME") || ""
   readonly property bool githubEnabled: preferences.githubEnabled !== false
   readonly property int githubRefreshMinutes: Math.max(1, Number(preferences.githubRefreshMinutes || 5))
   readonly property int githubLimit: Math.max(1, Math.min(200, Number(preferences.githubLimit || 100)))
+  property bool serviceReady: false
+  Component.onCompleted: root.serviceReady = true
+  // A property change can fire before the child processes exist; only a live
+  // settings change needs to clear cached GitHub data.
+  onGithubEnabledChanged: if (root.serviceReady && !root.githubEnabled) root.cancelGithubWork()
   readonly property string cloneDirectory: Model.normalizeCloneDirectory(preferences.cloneDirectory, homeDir)
   readonly property var githubRepos: githubStatus.repos || []
   readonly property var githubRows: Model.githubRows(githubRepos, repos, cloneDirectory, homeDir)
@@ -149,7 +162,7 @@ Item {
   // 0 turns timed refresh off.
   readonly property int refreshIntervalSec: preferences.refreshIntervalSec
   readonly property int fetchIntervalSec: preferences.fetchIntervalSec
-  readonly property bool busy: refreshing || syncing || repositoryActionRunning || githubRefreshing
+  readonly property bool busy: refreshing || syncing || repositoryActionRunning || githubRefreshing || githubStatsRefreshing
   // A limited connectivity probe can still allow Git access; block offline/portal states.
   readonly property bool networkReady: Networking.connectivity === NetworkConnectivity.Full || Networking.connectivity === NetworkConnectivity.Limited
 
@@ -175,6 +188,7 @@ Item {
     statusProcess.running = false
     syncProcess.running = false
     repositoryActionProcess.running = false
+    root.cancelGithubWork()
     monitoring = false
   }
 
@@ -474,23 +488,115 @@ Item {
     onTriggered: root.refreshGithub()
   }
 
+  function cancelGithubWork() {
+    root.githubOperationId++
+    root.githubStatsOperationId++
+    githubProcess.operationId = -1
+    githubProcess.running = false
+    githubStatsProcess.operationId = -1
+    githubStatsProcess.running = false
+    githubDeadline.stop()
+    githubStatsDeadline.stop()
+    githubRefreshing = false
+    githubStatsRefreshing = false
+    githubStatus = Model.defaultGithub()
+    githubError = ""
+    githubStats = { repoCount: 0, openPRs: 0, openIssues: 0 }
+    githubStatsValid = false
+    githubStatsError = ""
+    githubActivity = { calendar: null, weekly: null, login: "" }
+  }
+
+  function failGithubStats(message) {
+    githubStatsValid = false
+    githubStatsError = String(message || tr("GitHub statistics are unavailable.")).trim().slice(0, 240)
+  }
+
   function refreshGithub() {
     if (!root.active || !root.githubEnabled) return
-    if (!githubProcess.running) {
+    if (!githubRefreshing) {
+      root.githubOperationId++
       githubRefreshing = true
       githubError = ""
+      let id = root.githubOperationId
+      githubProcess.operationId = id
       githubProcess.command = ["gh", "repo", "list", "--limit", String(root.githubLimit),
         "--json", "name,nameWithOwner,owner,description,url,sshUrl,isPrivate,isFork,isArchived,pushedAt,createdAt,updatedAt,viewerPermission"]
       githubProcess.running = true
+      githubDeadline.restart()
+      // Quickshell may not emit `exited` when a command fails to start.
+      Qt.callLater(function () {
+        if (root.githubRefreshing && id === root.githubOperationId && !githubProcess.running)
+          root.finishGithub(id, -1, tr("GitHub repositories took too long."))
+      })
     }
-    refreshGithubStats()
+    root.refreshGithubStats()
+  }
+
+  function finishGithub(id, exitCode, detail) {
+    if (!root.githubRefreshing || id !== root.githubOperationId)
+      return
+    githubDeadline.stop()
+    githubProcess.operationId = -1
+    githubProcess.running = false
+    githubRefreshing = false
+    if (!root.active)
+      return
+    var message = String(detail || tr("GitHub command failed (exit %1).", [String(exitCode)])).trim().slice(0, 240)
+    if (exitCode !== 0) {
+      githubError = message
+      githubStatus = { ok: false, error: message, repos: [], lastChecked: 0 }
+      return
+    }
+    var parsed = Model.parseGithubRepos(githubOutput.text)
+    if (!parsed.ok) {
+      githubError = parsed.error
+      githubStatus = { ok: false, error: parsed.error, repos: [], lastChecked: 0 }
+      return
+    }
+    githubStatus = { ok: true, error: "", repos: parsed.repos, lastChecked: Date.now() / 1000 }
+    githubError = ""
   }
 
   function refreshGithubStats() {
-    if (!root.active || !root.githubEnabled || githubStatsProcess.running) return
+    if (!root.active || !root.githubEnabled || githubStatsRefreshing)
+      return
+    root.githubStatsOperationId++
     githubStatsRefreshing = true
-    githubStatsProcess.command = ["gh", "api", "graphql", "-f", "query={ viewer { login repositories(ownerAffiliations: OWNER, first: 1) { totalCount } pullRequests(states: OPEN) { totalCount } issues(states: OPEN) { totalCount } contributionsCollection { totalCommitContributions contributionCalendar { totalContributions weeks { contributionDays { date contributionCount contributionLevel } } } } } } }"]
+    githubStatsError = ""
+    let id = root.githubStatsOperationId
+    githubStatsProcess.operationId = id
+    githubStatsProcess.command = ["gh", "api", "graphql", "-f", "query=" + GithubStats.query()]
     githubStatsProcess.running = true
+    githubStatsDeadline.restart()
+    Qt.callLater(function () {
+      if (root.githubStatsRefreshing && id === root.githubStatsOperationId && !githubStatsProcess.running)
+        root.finishGithubStats(id, -1, tr("GitHub statistics took too long."))
+    })
+  }
+
+  function finishGithubStats(id, exitCode, detail) {
+    if (!root.githubStatsRefreshing || id !== root.githubStatsOperationId)
+      return
+    githubStatsDeadline.stop()
+    githubStatsProcess.operationId = -1
+    githubStatsProcess.running = false
+    githubStatsRefreshing = false
+    if (!root.active)
+      return
+    if (exitCode !== 0) {
+      root.failGithubStats(detail || tr("GitHub command failed (exit %1).", [String(exitCode)]))
+      return
+    }
+    var parsed = GithubStats.parse(githubStatsOutput.text, root.tr)
+    if (!parsed.ok) {
+      root.failGithubStats(parsed.error)
+      return
+    }
+    githubStats = parsed.stats
+    githubActivity = parsed.activity
+    githubStatsValid = true
+    githubStatsError = ""
   }
 
   function cloneGithubRepo(remote) {
@@ -666,67 +772,47 @@ Item {
 
   Process {
     id: githubProcess
+    property int operationId: -1
     stdout: StdioCollector {
       id: githubOutput
       waitForEnd: true
     }
-    stderr: StdioCollector {
-      id: githubErrorOutput
-      waitForEnd: true
+    // Keep gh's diagnostics out of the shell log; a bounded failure message is
+    // published by finishGithub instead of buffering untrusted stderr.
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function (data) { void data }
     }
     onExited: function (exitCode) {
-      root.githubRefreshing = false
-      if (!root.active) return
-      if (exitCode === 0) {
-        var parsed = Model.parseGithubRepos(githubOutput.text)
-        if (parsed.ok) {
-          root.githubStatus = { ok: true, error: "", repos: parsed.repos, lastChecked: Date.now() / 1000 }
-          root.githubError = ""
-        } else {
-          root.githubStatus = { ok: false, error: parsed.error, repos: root.githubRepos, lastChecked: root.githubStatus.lastChecked || 0 }
-          root.githubError = parsed.error
-        }
-      } else {
-        var detail = String(githubErrorOutput.text || "Failed to load GitHub repositories").trim().slice(0, 240)
-        root.githubError = detail
-        root.githubStatus = { ok: false, error: detail, repos: root.githubRepos, lastChecked: root.githubStatus.lastChecked || 0 }
-      }
+      root.finishGithub(githubProcess.operationId, exitCode)
     }
+  }
+
+  Timer {
+    id: githubDeadline
+    interval: 20000
+    repeat: false
+    onTriggered: root.finishGithub(root.githubOperationId, -1, root.tr("GitHub repositories took too long."))
   }
 
   Process {
     id: githubStatsProcess
+    property int operationId: -1
     stdout: StdioCollector { id: githubStatsOutput; waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
-    onExited: function (exitCode) {
-      root.githubStatsRefreshing = false
-      if (!root.active || exitCode !== 0) return
-      try {
-        var payload = JSON.parse(String(githubStatsOutput.text || "{}"))
-        var viewer = payload && payload.data && payload.data.viewer ? payload.data.viewer : null
-        if (!viewer) return
-        root.githubStats = {
-          repoCount: Number(viewer.repositories && viewer.repositories.totalCount || 0),
-          openPRs: Number(viewer.pullRequests && viewer.pullRequests.totalCount || 0),
-          openIssues: Number(viewer.issues && viewer.issues.totalCount || 0)
-        }
-        var cc = viewer.contributionsCollection || {}
-        var cal = cc.contributionCalendar || {}
-        var weeks = Array.isArray(cal.weeks) ? cal.weeks : []
-        var parsedWeeks = weeks.map(function(w) {
-          return (w.contributionDays || []).map(function(d) {
-            var lvl = String(d.contributionLevel || "")
-            var level = lvl.indexOf("FOURTH") !== -1 ? 4 : lvl.indexOf("THIRD") !== -1 ? 3 : lvl.indexOf("SECOND") !== -1 ? 2 : lvl.indexOf("FIRST") !== -1 ? 1 : 0
-            return { date: String(d.date || ""), count: Number(d.contributionCount || 0), level: level }
-          })
-        })
-        root.githubActivity = {
-          login: String(viewer.login || ""),
-          weekly: { commits: Number(cc.totalCommitContributions || 0) },
-          calendar: { total: Number(cal.totalContributions || 0), weeks: parsedWeeks }
-        }
-      } catch (e) {}
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function (data) { void data }
     }
+    onExited: function (exitCode) {
+      root.finishGithubStats(githubStatsProcess.operationId, exitCode)
+    }
+  }
+
+  Timer {
+    id: githubStatsDeadline
+    interval: 20000
+    repeat: false
+    onTriggered: root.finishGithubStats(root.githubStatsOperationId, -1, root.tr("GitHub statistics took too long."))
   }
 
   Process {

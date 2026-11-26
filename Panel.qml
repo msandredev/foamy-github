@@ -27,7 +27,12 @@ Panel {
   readonly property var view: popup.bodyItem
 
   readonly property var totals: Service.totals
-  readonly property string tooltipText: (view ? view.healthText : FoamyI18n.tn("%1 repositories", Service.status.repoCount)) + "\n" + FoamyI18n.t("Left: details · Middle: fetch")
+  readonly property string tooltipText: {
+    var base = view ? view.healthText : FoamyI18n.tn("%1 repositories", Service.status.repoCount)
+    if (Service.githubStatsError !== "")
+      base += "\n" + FoamyI18n.t("GitHub statistics are unavailable.")
+    return base + "\n" + FoamyI18n.t("Left: details · Middle: fetch")
+  }
 
   FoamyMember {
     id: member

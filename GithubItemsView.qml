@@ -6,8 +6,8 @@ import "Model.js" as Model
 import "GithubItems.js" as GithubItems
 
 // Pull requests / Issues page for the GitHub popup. It owns its own bounded
-// `gh search` request so Service.qml (which carries uncommitted user work)
-// stays untouched. Results are parsed and URL-checked in GithubItems.js.
+// `gh search` request; Service owns the summary GraphQL request. Results are
+// parsed and URL-checked in GithubItems.js.
 Item {
   id: root
   objectName: "githubItemsPage"

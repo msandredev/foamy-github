@@ -2,7 +2,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import qs.Commons
 import qs.Ui
 import "kit"
 import "Model.js" as Model
@@ -72,7 +71,7 @@ PanelKeyCatcher {
   readonly property var displayRows: {
     var rows = []
     var local = root.repos
-    for (var i = 0; i < local.length; i++)
+    for (let i = 0; i < local.length; i++)
       rows.push({ kind: "local", repo: local[i], localIndex: i })
     if (root.showLocalSection && local.length === 0)
       rows.push({ kind: "localEmpty" })
@@ -82,7 +81,7 @@ PanelKeyCatcher {
         rows.push({ kind: "remoteError" })
       if (!root.githubRefreshing && root.githubError === "" && root.githubRows.length === 0)
         rows.push({ kind: "remoteEmpty" })
-      for (var j = 0; j < root.githubRows.length; j++)
+      for (let j = 0; j < root.githubRows.length; j++)
         rows.push({ kind: "remote", row: root.githubRows[j] })
     }
     return rows
@@ -100,8 +99,8 @@ PanelKeyCatcher {
       var da = Date.parse(ra.pushedAt || ra.updatedAt || ra.createdAt || "") || 0
       var db = Date.parse(rb.pushedAt || rb.updatedAt || rb.createdAt || "") || 0
       if (sortMode === "created") {
-        var ca = Date.parse(ra.createdAt || ra.pushedAt || "") || 0
-        var cb = Date.parse(rb.createdAt || rb.pushedAt || "") || 0
+        let ca = Date.parse(ra.createdAt || ra.pushedAt || "") || 0
+        let cb = Date.parse(rb.createdAt || rb.pushedAt || "") || 0
         if (cb !== ca) return cb - ca
       } else if (db !== da) return db - da
       return String(ra.nameWithOwner || "").toLowerCase().localeCompare(String(rb.nameWithOwner || "").toLowerCase())
@@ -131,7 +130,7 @@ PanelKeyCatcher {
   readonly property int githubCount: {
     if (!service || service.githubEnabled === false)
       return 0
-    var stats = Number((service.githubStats && service.githubStats.repoCount) || 0)
+    var stats = service.githubStatsValid ? Number((service.githubStats && service.githubStats.repoCount) || 0) : 0
     return stats > 0 ? stats : (service.githubRows || []).length
   }
   readonly property string githubError: service ? (service.githubError || "") : ""
@@ -180,7 +179,7 @@ PanelKeyCatcher {
       return FoamyI18n.t("Everything is in sync")
     if (service.status.affectedCount === 0 && !hasFailures)
       return FoamyI18n.t("Working trees are clean")
-    return FoamyI18n.tn("%1 repositories need attention", Math.max(service.status.affectedCount, repos.length))
+    return FoamyI18n.tn("%1 repositories need attention", Math.max(service.status.affectedCount, service.status.repoCount))
   }
   readonly property string statusTitle: service && service.actionStatus !== "" ? service.actionStatus : healthText
   readonly property bool animateTitle: !!service && (service.syncing || service.repositoryActionRunning || (service.refreshing && service.lastChecked === 0))
@@ -291,8 +290,8 @@ PanelKeyCatcher {
         return
       }
       // find displayRows index for local row
-      for (var i = 0; i < root.displayRows.length; i++) {
-        var dr = root.displayRows[i]
+      for (let i = 0; i < root.displayRows.length; i++) {
+        let dr = root.displayRows[i]
         if (dr.kind === "local" && dr.localIndex === row) { list.positionViewAtIndex(i, ListView.Contain); return }
       }
     }
@@ -494,9 +493,9 @@ PanelKeyCatcher {
           spacing: FoamyStyle.gapSmall
           readonly property real cellWidth: (width - spacing * 3) / 4
           StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "box"; label: FoamyI18n.t("repos"); value: root.githubCount; tint: FoamyPalette.info }
-          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "git-branch"; label: FoamyI18n.t("open PRs"); value: root.service ? root.service.githubStats.openPRs : 0; tint: FoamyPalette.success; selectsSection: "pulls" }
-          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "circle-dot"; label: FoamyI18n.t("open issues"); value: root.service ? root.service.githubStats.openIssues : 0; tint: FoamyPalette.warning; selectsSection: "issues" }
-          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "activity"; label: FoamyI18n.t("commits"); value: root.service && root.service.githubActivity.weekly ? root.service.githubActivity.weekly.commits : 0; tint: FoamyPalette.accent }
+          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "git-branch"; label: FoamyI18n.t("open PRs"); value: root.service && root.service.githubStatsValid ? root.service.githubStats.openPRs : 0; unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid; tint: FoamyPalette.success; selectsSection: "pulls" }
+          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "circle-dot"; label: FoamyI18n.t("open issues"); value: root.service && root.service.githubStatsValid ? root.service.githubStats.openIssues : 0; unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid; tint: FoamyPalette.warning; selectsSection: "issues" }
+          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "activity"; label: FoamyI18n.t("commits/yr"); value: root.service && root.service.githubStatsValid && root.service.githubActivity.weekly ? root.service.githubActivity.weekly.commits : 0; unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid; tint: FoamyPalette.accent }
         }
 
         // The contribution heatmap stays hidden: this popup is capped at 560px.
@@ -720,7 +719,7 @@ PanelKeyCatcher {
         id: localEmptyComp
         StateNote {
           rowData: null
-          message: !root.service ? "" : root.query !== "" ? FoamyI18n.t("No local repositories match your search.") : root.service.lastError !== "" ? FoamyI18n.t("Local repository status is unavailable. Try Refresh again.") : root.service.lastChecked === 0 ? FoamyI18n.t("Checking local repositories…") : root.service.status.repoCount === 0 ? FoamyI18n.t("No local repositories found. Add a folder in Settings or clone from GitHub below.") : FoamyI18n.t("All local repositories are clean and match their upstream")
+          message: !root.service ? "" : root.query !== "" ? FoamyI18n.t("No local repositories match your search.") : root.service.lastError !== "" ? FoamyI18n.t("Local repository status is unavailable. Try Refresh again.") : root.service.lastChecked === 0 ? FoamyI18n.t("Checking local repositories…") : root.service.status.repoCount === 0 ? root.service.githubEnabled === false || root.githubError !== "" ? FoamyI18n.t("No local repositories found. Add a folder in Settings.") : FoamyI18n.t("No local repositories found. Add a folder in Settings or clone from GitHub below.") : FoamyI18n.t("All local repositories are clean and match their upstream")
         }
       }
       Component {
@@ -735,7 +734,7 @@ PanelKeyCatcher {
         id: remoteEmptyComp
         StateNote {
           rowData: null
-          message: root.query !== "" ? FoamyI18n.t("No GitHub repositories match your search.") : FoamyI18n.t("No GitHub repositories loaded. Check gh auth status or refresh.")
+          message: root.query !== "" ? FoamyI18n.t("No GitHub repositories match your search.") : root.filterMode === "cloned" ? FoamyI18n.t("No cloned GitHub repositories.") : root.filterMode === "notCloned" ? FoamyI18n.t("All GitHub repositories are cloned.") : FoamyI18n.t("No GitHub repositories loaded. Check gh auth status or refresh.")
         }
       }
       Component {
@@ -764,7 +763,9 @@ PanelKeyCatcher {
             Text {
               anchors.verticalCenter: parent.verticalCenter
               visible: !root.githubRefreshing && root.githubRows.length > 0
-              text: FoamyI18n.number(root.githubRows.length)
+              text: root.query !== "" || root.filterMode !== "all"
+                ? FoamyI18n.t("%1 of %2", [FoamyI18n.number(root.githubRows.length), FoamyI18n.number(root.githubCount)])
+                : FoamyI18n.number(root.githubCount)
               textFormat: Text.PlainText
               color: FoamyPalette.mutedText
               font.family: FoamyStyle.monoFamily
@@ -1110,9 +1111,10 @@ PanelKeyCatcher {
     property int value: 0
     property color tint: FoamyPalette.text
     property bool alwaysVisible: false
+    property bool unavailable: false
     property string selectsSection: ""
     objectName: badge.selectsSection ? badge.selectsSection + "Badge" : ""
-    visible: alwaysVisible || value > 0
+    visible: alwaysVisible || unavailable || value > 0
     radius: FoamyStyle.radiusSmall
     color: Qt.alpha(tint, 0.12)
     border.width: 1
@@ -1124,7 +1126,7 @@ PanelKeyCatcher {
       anchors.centerIn: parent
       spacing: FoamyStyle.gapSmall
       FoamyIcon { name: icon; width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall; color: tint; anchors.verticalCenter: parent.verticalCenter }
-      Text { text: FoamyI18n.number(value); textFormat: Text.PlainText; color: tint; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.bodySmall; font.weight: Font.DemiBold }
+      Text { text: unavailable ? "?" : FoamyI18n.number(value); textFormat: Text.PlainText; color: tint; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.bodySmall; font.weight: Font.DemiBold }
       Text { text: label; textFormat: Text.PlainText; color: FoamyPalette.secondaryText; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.caption }
     }
     MouseArea {

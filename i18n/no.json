@@ -220,5 +220,14 @@
   "Draft": "Utkast",
   "Could not load GitHub items.": "Kunne ikke laste GitHub-elementer.",
   "Try again": "Prøv igjen",
-  "Showing the 30 most recent.": "Viser de 30 nyeste."
+  "Showing the 30 most recent.": "Viser de 30 nyeste.",
+  "GitHub statistics are unavailable.": "GitHub-statistikk er utilgjengelig.",
+  "GitHub repositories took too long.": "GitHub-prosjekter tok for lang tid.",
+  "GitHub statistics took too long.": "GitHub-statistikk tok for lang tid.",
+  "GitHub command failed (exit %1).": "GitHub-kommandoen mislyktes (avslutning %1).",
+  "commits/yr": "commits/år",
+  "No cloned GitHub repositories.": "Ingen klonede GitHub-prosjekter.",
+  "All GitHub repositories are cloned.": "Alle GitHub-prosjekter er klonet.",
+  "%1 of %2": "%1 av %2",
+  "No local repositories found. Add a folder in Settings.": "Ingen lokale prosjekter funnet. Legg til en mappe i Innstillinger."
 }

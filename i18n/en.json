@@ -197,7 +197,6 @@
   "Local": "Local",
   "Remote": "Remote",
   "Cloned": "Cloned",
-  "Not cloned": "Not cloned",
   "repos": "repos",
   "open PRs": "open PRs",
   "open issues": "open issues",
@@ -221,5 +220,14 @@
   "Draft": "Draft",
   "Could not load GitHub items.": "Could not load GitHub items.",
   "Try again": "Try again",
-  "Showing the 30 most recent.": "Showing the 30 most recent."
+  "Showing the 30 most recent.": "Showing the 30 most recent.",
+  "GitHub statistics are unavailable.": "GitHub statistics are unavailable.",
+  "GitHub repositories took too long.": "GitHub repositories took too long.",
+  "GitHub statistics took too long.": "GitHub statistics took too long.",
+  "GitHub command failed (exit %1).": "GitHub command failed (exit %1).",
+  "commits/yr": "commits/yr",
+  "No cloned GitHub repositories.": "No cloned GitHub repositories.",
+  "All GitHub repositories are cloned.": "All GitHub repositories are cloned.",
+  "%1 of %2": "%1 of %2",
+  "No local repositories found. Add a folder in Settings.": "No local repositories found. Add a folder in Settings."
 }
