@@ -4,6 +4,9 @@
 var MAX_OUTPUT = 64 * 1024
 var WEEK_LIMIT = 53
 var DAY_LIMIT = 7
+var DAY_MS = 86400000
+var MIN_DAY = Date.UTC(2008, 0, 1)
+var MAX_DAY = Date.UTC(2100, 0, 1)
 
 function query() {
   return "{ viewer { login "
@@ -35,6 +38,49 @@ function level(value) {
   return 0
 }
 
+function dayMs(value) {
+  var text = boundedText(value, 40)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text))
+    return -1
+  var ms = Date.parse(text + "T00:00:00Z")
+  if (!isFinite(ms) || ms < MIN_DAY || ms > MAX_DAY || new Date(ms).toISOString().slice(0, 10) !== text)
+    return -1
+  return ms
+}
+
+function streaks(counts) {
+  var indices = []
+  for (var key in counts) {
+    if (Object.prototype.hasOwnProperty.call(counts, key))
+      indices.push(Number(key))
+  }
+  indices.sort(function (a, b) {
+    return a - b
+  })
+  if (indices.length === 0)
+    return { current: 0, longest: 0 }
+  var longest = 0
+  var run = 0
+  var previous = null
+  for (var i = 0; i < indices.length; i++) {
+    var index = indices[i]
+    if (counts[index] > 0) {
+      run = previous !== null && index === previous + 1 ? run + 1 : 1
+      longest = Math.max(longest, run)
+      previous = index
+    }
+  }
+  var end = indices[indices.length - 1]
+  if (!(counts[end] > 0))
+    end--
+  var current = 0
+  while (counts[end] > 0) {
+    current++
+    end--
+  }
+  return { current: current, longest: longest }
+}
+
 function parse(text, tr) {
   var translate = typeof tr === "function" ? tr : function (key) { return key }
   var invalid = {
@@ -62,16 +108,24 @@ function parse(text, tr) {
   var cc = viewer.contributionsCollection || {}
   var calendar = cc.contributionCalendar || {}
   var sourceWeeks = Array.isArray(calendar.weeks) ? calendar.weeks.slice(0, WEEK_LIMIT) : []
+  var counts = {}
   var weeks = sourceWeeks.map(function (week) {
     var days = Array.isArray(week && week.contributionDays) ? week.contributionDays.slice(0, DAY_LIMIT) : []
     return days.map(function (day) {
+      var text = boundedText(day && day.date, 40)
+      var ms = dayMs(text)
+      var dayCount = count(day && day.contributionCount)
+      if (ms >= 0)
+        counts[Math.floor(ms / DAY_MS)] = dayCount
       return {
-        date: boundedText(day && day.date, 40),
-        count: count(day && day.contributionCount),
-        level: level(day && day.contributionLevel)
+        date: text,
+        count: dayCount,
+        level: level(day && day.contributionLevel),
+        row: ms >= 0 ? new Date(ms).getUTCDay() : 0
       }
     })
   })
+  var streak = streaks(counts)
 
   return {
     ok: true,
@@ -85,7 +139,9 @@ function parse(text, tr) {
       weekly: { commits: count(cc.totalCommitContributions) },
       calendar: {
         total: count(calendar.totalContributions),
-        weeks: weeks
+        weeks: weeks,
+        streak: streak.current,
+        longest: streak.longest
       }
     },
     error: ""
@@ -98,6 +154,8 @@ if (typeof module !== "undefined") {
     query: query,
     parse: parse,
     count: count,
-    level: level
+    level: level,
+    dayMs: dayMs,
+    streaks: streaks
   }
 }

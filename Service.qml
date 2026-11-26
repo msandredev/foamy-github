@@ -6,6 +6,7 @@ import Quickshell.Networking
 import "kit"
 import "Model.js" as Model
 import "GithubStats.js" as GithubStats
+import "GithubLanguages.js" as GithubLanguages
 import "Preferences.js" as Schema
 import "kit/FoamyPrefs.js" as Prefs
 import "kit/FoamyNative.js" as FoamyNative
@@ -57,10 +58,20 @@ Item {
       login: ""
     })
   property bool githubActivityRefreshing: false
+  // Language bytes are a separate, on-demand request: it must not delay or
+  // invalidate the badges. Zeros are not an answer until a reply is accepted.
+  property var githubLanguages: ({
+      languages: [],
+      total: 0
+    })
+  property bool githubLanguagesValid: false
+  property string githubLanguagesError: ""
+  property bool githubLanguagesRefreshing: false
   // Each process is tied to the request that started it, so a late exit from a
   // cancelled or timed-out child cannot complete the next request.
   property int githubOperationId: 0
   property int githubStatsOperationId: 0
+  property int githubLanguagesOperationId: 0
   readonly property string homeDir: Quickshell.env("HOME") || ""
   readonly property bool githubEnabled: preferences.githubEnabled !== false
   readonly property int githubRefreshMinutes: Math.max(1, Number(preferences.githubRefreshMinutes || 5))
@@ -500,14 +511,19 @@ Item {
   function cancelGithubWork() {
     root.githubOperationId++
     root.githubStatsOperationId++
+    root.githubLanguagesOperationId++
     githubProcess.operationId = -1
     githubProcess.running = false
     githubStatsProcess.operationId = -1
     githubStatsProcess.running = false
+    githubLanguagesProcess.operationId = -1
+    githubLanguagesProcess.running = false
     githubDeadline.stop()
     githubStatsDeadline.stop()
+    githubLanguagesDeadline.stop()
     githubRefreshing = false
     githubStatsRefreshing = false
+    githubLanguagesRefreshing = false
     githubStatus = Model.defaultGithub()
     githubError = ""
     githubStats = {
@@ -522,6 +538,12 @@ Item {
       weekly: null,
       login: ""
     }
+    githubLanguages = {
+      languages: [],
+      total: 0
+    }
+    githubLanguagesValid = false
+    githubLanguagesError = ""
   }
 
   function failGithubStats(message) {
@@ -629,6 +651,56 @@ Item {
     githubActivity = parsed.activity
     githubStatsValid = true
     githubStatsError = ""
+  }
+
+  function failGithubLanguages(message) {
+    githubLanguagesValid = false
+    githubLanguages = {
+      languages: [],
+      total: 0
+    }
+    githubLanguagesError = String(message || tr("GitHub languages are unavailable.")).trim().slice(0, 240)
+  }
+
+  function refreshGithubLanguages(force) {
+    if (!root.active || !root.githubEnabled || githubLanguagesRefreshing || (githubLanguagesValid && !force))
+      return
+    root.githubLanguagesOperationId++
+    githubLanguagesRefreshing = true
+    githubLanguagesError = ""
+    let id = root.githubLanguagesOperationId
+    githubLanguagesProcess.operationId = id
+    githubLanguagesProcess.command = GithubLanguages.command()
+    githubLanguagesProcess.running = true
+    githubLanguagesDeadline.restart()
+    // Quickshell may not emit `exited` when a command fails to start.
+    Qt.callLater(function () {
+      if (root.githubLanguagesRefreshing && id === root.githubLanguagesOperationId && !githubLanguagesProcess.running)
+        root.finishGithubLanguages(id, -1, tr("GitHub languages took too long."))
+    })
+  }
+
+  function finishGithubLanguages(id, exitCode, detail) {
+    if (!root.githubLanguagesRefreshing || id !== root.githubLanguagesOperationId)
+      return
+    githubLanguagesDeadline.stop()
+    githubLanguagesProcess.operationId = -1
+    githubLanguagesProcess.running = false
+    githubLanguagesRefreshing = false
+    if (!root.active)
+      return
+    if (exitCode !== 0) {
+      root.failGithubLanguages(detail || tr("GitHub command failed (exit %1).", [String(exitCode)]))
+      return
+    }
+    var parsed = GithubLanguages.parse(githubLanguagesOutput.text, root.tr)
+    if (!parsed.ok) {
+      root.failGithubLanguages(parsed.error)
+      return
+    }
+    githubLanguages = parsed
+    githubLanguagesValid = true
+    githubLanguagesError = ""
   }
 
   function cloneGithubRepo(remote) {
@@ -857,6 +929,31 @@ Item {
     interval: 20000
     repeat: false
     onTriggered: root.finishGithubStats(root.githubStatsOperationId, -1, root.tr("GitHub statistics took too long."))
+  }
+
+  Process {
+    id: githubLanguagesProcess
+    property int operationId: -1
+    stdout: StdioCollector {
+      id: githubLanguagesOutput
+      waitForEnd: true
+    }
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function (data) {
+        void data
+      }
+    }
+    onExited: function (exitCode) {
+      root.finishGithubLanguages(githubLanguagesProcess.operationId, exitCode)
+    }
+  }
+
+  Timer {
+    id: githubLanguagesDeadline
+    interval: 20000
+    repeat: false
+    onTriggered: root.finishGithubLanguages(root.githubLanguagesOperationId, -1, root.tr("GitHub languages took too long."))
   }
 
   Process {

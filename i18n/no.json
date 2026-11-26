@@ -229,5 +229,17 @@
   "No cloned GitHub repositories.": "Ingen klonede GitHub-prosjekter.",
   "All GitHub repositories are cloned.": "Alle GitHub-prosjekter er klonet.",
   "%1 of %2": "%1 av %2",
-  "No local repositories found. Add a folder in Settings.": "Ingen lokale prosjekter funnet. Legg til en mappe i Innstillinger."
+  "No local repositories found. Add a folder in Settings.": "Ingen lokale prosjekter funnet. Legg til en mappe i Innstillinger.",
+  "Activity & languages": "Aktivitet og språk",
+  "Refresh languages": "Oppdater språk",
+  "Activity": "Aktivitet",
+  "Languages": "Språk",
+  "GitHub languages are unavailable.": "GitHub-språk er ikke tilgjengelige.",
+  "GitHub languages took too long.": "GitHub-språk tok for lang tid.",
+  "No language data.": "Ingen språkdata.",
+  "%1%": "%1%",
+  "Based on up to 100 repositories": "Basert på opptil 100 prosjekter",
+  "Other": "Annet",
+  "Current streak: %1 days": "Nåværende streak: %1 dager",
+  "Longest streak: %1 days": "Lengste streak: %1 dager"
 }

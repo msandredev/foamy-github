@@ -30,7 +30,7 @@ PanelKeyCatcher {
   property string searchText: ""
   property string filterMode: "all" // all, local, remote, cloned, notCloned
   property string sortMode: "updated" // updated, name, created
-  property string section: "repos" // repos, pulls, issues
+  property string section: "repos" // repos, pulls, issues, activity
 
   signal closeRequestedByView
   signal settingsRequested
@@ -49,14 +49,23 @@ PanelKeyCatcher {
   function matchesQuery(text) {
     return query === "" || String(text || "").toLowerCase().indexOf(query) !== -1
   }
-  // Clicking the active badge returns to repositories; the other two switch
-  // the body to the bounded Pull requests / Issues page.
+  // Clicking the active badge returns to repositories; the other badges switch
+  // the body to the bounded Pull requests / Issues / Activity page.
   function setSection(next) {
     var target = next === root.section ? "repos" : next
-    if (target !== "repos" && target !== "pulls" && target !== "issues")
+    if (target !== "repos" && target !== "pulls" && target !== "issues" && target !== "activity")
       return
     root.section = target
     cursor.reset()
+  }
+  function focusBody() {
+    if (root.section === "repos")
+      searchField.focusInput()
+    else
+      bodyPage().forceActiveFocus()
+  }
+  function bodyPage() {
+    return root.section === "activity" ? activityPage : itemsPage
   }
   readonly property bool showLocalSection: filterMode === "all" || filterMode === "local"
   readonly property bool showRemoteSection: filterMode === "all" || filterMode === "remote" || filterMode === "cloned" || filterMode === "notCloned"
@@ -230,14 +239,14 @@ PanelKeyCatcher {
       if (dx < 0)
         root.setSection("repos")
       else if (dy !== 0)
-        itemsPage.move(dy)
+        bodyPage().move(dy)
       return
     }
     cursor.move(dy !== 0 ? dy : dx)
   }
   onActivateRequested: {
     if (root.section !== "repos")
-      itemsPage.activate()
+      bodyPage().activate()
     else
       root.activate(cursor.index)
   }
@@ -267,7 +276,7 @@ PanelKeyCatcher {
       // Type-to-filter should work as soon as the popup opens. Defer twice so
       // the host's own focus priming cannot put the cursor back on the panel.
       Qt.callLater(function () {
-        Qt.callLater(root.section === "repos" ? searchField.focusInput : itemsPage.forceActiveFocus)
+        Qt.callLater(root.focusBody)
       })
     } else {
       cursor.reset()
@@ -282,7 +291,7 @@ PanelKeyCatcher {
     if (!root.opened)
       return
     Qt.callLater(function () {
-      Qt.callLater(root.section === "repos" ? searchField.focusInput : itemsPage.forceActiveFocus)
+      Qt.callLater(root.focusBody)
     })
   }
   onSearchTextChanged: cursor.reset()
@@ -293,12 +302,7 @@ PanelKeyCatcher {
       settingsPage.resetScroll()
       Qt.callLater(settingsPage.focusBack)
     } else {
-      Qt.callLater(function () {
-        if (root.section === "repos")
-          searchField.focusInput()
-        else
-          itemsPage.forceActiveFocus()
-      })
+      Qt.callLater(root.focusBody)
     }
   }
 
@@ -555,10 +559,9 @@ PanelKeyCatcher {
             value: root.service && root.service.githubStatsValid && root.service.githubActivity.weekly ? root.service.githubActivity.weekly.commits : 0
             unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid
             tint: FoamyPalette.accent
+            selectsSection: "activity"
           }
         }
-
-        // The contribution heatmap stays hidden: this popup is capped at 560px.
       }
 
       Item {
@@ -914,10 +917,20 @@ PanelKeyCatcher {
 
     GithubItemsView {
       id: itemsPage
-      visible: root.section !== "repos"
+      visible: root.section === "pulls" || root.section === "issues"
       width: parent.width
       height: Math.max(0, mainColumn.height - fixedHeader.height)
       section: root.section
+      onBackRequested: root.setSection("repos")
+    }
+
+    GithubActivityView {
+      id: activityPage
+      visible: root.section === "activity"
+      width: parent.width
+      height: Math.max(0, mainColumn.height - fixedHeader.height)
+      service: root.service
+      active: root.section === "activity"
       onBackRequested: root.setSection("repos")
     }
   }
@@ -1266,86 +1279,6 @@ PanelKeyCatcher {
       enabled: badge.selectsSection !== ""
       cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
       onClicked: root.setSection(badge.selectsSection)
-    }
-  }
-
-  component ContributionGraph: Column {
-    property var graph: null
-    spacing: FoamyStyle.gapSmall
-    readonly property var weeks: graph && graph.weeks ? graph.weeks : []
-    readonly property int total: graph ? Number(graph.total || 0) : 0
-
-    RowLayout {
-      width: parent.width
-      spacing: FoamyStyle.gapSmall
-      Text {
-        Layout.fillWidth: true
-        text: FoamyI18n.t("%1 contributions in the last year", [FoamyI18n.number(parent.parent.total)])
-        textFormat: Text.PlainText
-        color: FoamyPalette.secondaryText
-        font.family: FoamyStyle.fontFamily
-        font.pixelSize: FoamyStyle.font.caption
-      }
-      Row {
-        spacing: 3
-        Text {
-          text: FoamyI18n.t("Less")
-          color: FoamyPalette.mutedText
-          font.family: FoamyStyle.fontFamily
-          font.pixelSize: FoamyStyle.font.caption
-          anchors.verticalCenter: parent.verticalCenter
-        }
-        Repeater {
-          model: [0, 1, 2, 3, 4]
-          Rectangle {
-            required property int modelData
-            width: 8
-            height: 8
-            radius: 2
-            color: modelData === 0 ? Qt.alpha(FoamyPalette.text, 0.08) : modelData === 1 ? Qt.alpha(FoamyPalette.success, 0.28) : modelData === 2 ? Qt.alpha(FoamyPalette.success, 0.48) : modelData === 3 ? Qt.alpha(FoamyPalette.success, 0.72) : FoamyPalette.success
-          }
-        }
-        Text {
-          text: FoamyI18n.t("More")
-          color: FoamyPalette.mutedText
-          font.family: FoamyStyle.fontFamily
-          font.pixelSize: FoamyStyle.font.caption
-          anchors.verticalCenter: parent.verticalCenter
-        }
-      }
-    }
-
-    Flickable {
-      width: parent.width
-      height: heatGrid.implicitHeight
-      contentWidth: heatGrid.implicitWidth
-      clip: true
-      interactive: contentWidth > width
-      boundsBehavior: Flickable.StopAtBounds
-      Row {
-        id: heatGrid
-        spacing: 2
-        Repeater {
-          model: weeks
-          delegate: Column {
-            required property var modelData
-            spacing: 2
-            Repeater {
-              model: modelData
-              delegate: Rectangle {
-                required property var modelData
-                width: 8
-                height: 8
-                radius: 2
-                color: {
-                  var l = Number(modelData.level || 0)
-                  return l <= 0 ? Qt.alpha(FoamyPalette.text, 0.08) : l === 1 ? Qt.alpha(FoamyPalette.success, 0.28) : l === 2 ? Qt.alpha(FoamyPalette.success, 0.48) : l === 3 ? Qt.alpha(FoamyPalette.success, 0.72) : FoamyPalette.success
-                }
-              }
-            }
-          }
-        }
-      }
     }
   }
 

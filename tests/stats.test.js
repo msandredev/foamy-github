@@ -36,6 +36,31 @@ test('a valid payload populates bounded counts and activity', () => {
   assert.equal(result.activity.weekly.commits, 19)
   assert.equal(result.activity.calendar.total, 23)
   assert.equal(result.activity.calendar.weeks[0][0].level, 4)
+  assert.equal(result.activity.calendar.weeks[0][0].row, 3)
+})
+
+test('the calendar derives weekday rows, streaks and rejects impossible dates', () => {
+  const source = JSON.parse(JSON.stringify(payload))
+  const days = [
+    { date: '2026-11-20', contributionCount: 0, contributionLevel: 'NONE' },
+    { date: '2026-11-21', contributionCount: 1, contributionLevel: 'FIRST_QUARTILE' },
+    { date: '2026-11-22', contributionCount: 2, contributionLevel: 'SECOND_QUARTILE' },
+    { date: '2026-11-23', contributionCount: 3, contributionLevel: 'THIRD_QUARTILE' },
+    { date: '2026-11-25', contributionCount: 0, contributionLevel: 'NONE' },
+    { date: '2026-02-31', contributionCount: 9, contributionLevel: 'FOURTH_QUARTILE' }
+  ]
+  source.data.viewer.contributionsCollection.contributionCalendar.weeks = [{ contributionDays: days }]
+  const result = Stats.parse(JSON.stringify(source), tr)
+  assert.equal(result.ok, true)
+  assert.equal(result.activity.calendar.longest, 3)
+  assert.equal(result.activity.calendar.streak, 0)
+  assert.equal(result.activity.calendar.weeks[0][1].row, 6)
+  assert.equal(result.activity.calendar.weeks[0][5].row, 0)
+
+  days[5] = { date: '2026-11-26', contributionCount: 4, contributionLevel: 'FOURTH_QUARTILE' }
+  const active = Stats.parse(JSON.stringify(source), tr)
+  assert.equal(active.activity.calendar.streak, 1)
+  assert.equal(active.activity.calendar.longest, 3)
 })
 
 test('GraphQL errors, missing viewers and oversized output fail closed', () => {

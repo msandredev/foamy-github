@@ -229,5 +229,17 @@
   "No cloned GitHub repositories.": "No cloned GitHub repositories.",
   "All GitHub repositories are cloned.": "All GitHub repositories are cloned.",
   "%1 of %2": "%1 of %2",
-  "No local repositories found. Add a folder in Settings.": "No local repositories found. Add a folder in Settings."
+  "No local repositories found. Add a folder in Settings.": "No local repositories found. Add a folder in Settings.",
+  "Activity & languages": "Activity & languages",
+  "Refresh languages": "Refresh languages",
+  "Activity": "Activity",
+  "Languages": "Languages",
+  "GitHub languages are unavailable.": "GitHub languages are unavailable.",
+  "GitHub languages took too long.": "GitHub languages took too long.",
+  "No language data.": "No language data.",
+  "%1%": "%1%",
+  "Based on up to 100 repositories": "Based on up to 100 repositories",
+  "Other": "Other",
+  "Current streak: %1 days": "Current streak: %1 days",
+  "Longest streak: %1 days": "Longest streak: %1 days"
 }

@@ -91,22 +91,43 @@ A página `GithubActivityView.qml` contém:
 ```text
 [←] Activity & languages
 24 contributions in the last year
-▪ ▪ ▪ ▪ ▪ ▪ ▪ ▪ ▪ ▪ ▪ ▪   heatmap rolável
+Nov  Dez  Jan             labels de mês
+▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪  53 semanas ajustadas à largura
 Less ▢▢▢▢▢ More
+Current streak: 4 days · Longest streak: 12 days
 Languages
 Rust ████████████ 47%   QML ██████ 26%   Python ████ 19%
 ```
 
 Componentes: um `LanguageBar` com segmentos coloridos e uma legenda com
  nome, cor e porcentagem. Cores vêm do GitHub, mas só após validação de hex.
-Texto é `PlainText`. O heatmap continua com os tokens Foamy atuais.
+Texto é `PlainText`. O heatmap continua com os tokens Foamy atuais, mas passa
+a caber na largura do popup, com labels de mês e tooltip por dia.
+
+### Adições aprovadas
+
+Depois do desenho inicial o usuário apontou
+`joshuagemvicente/omarchy-plugin-github` (MIT). Foram portadas apenas as
+ideias que cabem neste escopo, sem copiar arquivos:
+
+- heatmap de 53 colunas dimensionado pela largura disponível, em vez de
+  scroll horizontal;
+- labels de mês acima do grid e tooltip `%1 contributions on %2` no dia
+  sob o ponteiro (a chave já existia no i18n);
+- streak atual e maior streak derivados do mesmo calendário no parser puro,
+  com datas inválidas descartadas.
+
+Métricas semanais, filas de atenção, inbox, busca e troca de conta ficaram
+fora deste escopo.
 
 ### Testes
 
 - `tests/languages.test.js`: query equilibrada e campos presentes; agregação
   correta; porcentagens somam ~100 com arredondamento; payload inválido,
   oversized, cor inválida e tamanho negativo falham fechado.
-- Harness QML: abrir página pelo badge, voltar, estado vazio/erro/loading.
+- `tests/stats.test.js`: linhas de semana, streaks e datas impossíveis.
+- Harness QML: abrir página pelo badge, voltar, estado vazio/erro/loading,
+  heatmap, mês, streak e legenda.
 - Suíte existente, `qmllint`, `qmlformat`, `plugin-validate`, stress curto.
 
 ## Scope decisions

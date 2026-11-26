@@ -31,12 +31,19 @@ omarchy plugin add ~/.config/omarchy/plugins/msandredev.github --enable
    and anything that failed.
 6. Click the **open PRs** or **open issues** badge to list those items from `gh search`; click a
    row to open it on GitHub. Click the active badge again, press Backspace or Left/h to return.
+7. Click **commits/yr** to open **Activity & languages**: the contribution calendar for the
+   last year (53 weeks fitted to the panel, with month labels, a day tooltip and current
+   and longest streaks) and a bar of languages aggregated by bytes from up to 100 owned
+   repositories. Use the refresh icon to retry. Backspace or Left/h returns to the
+   repository list.
 
 The summary badges come from GitHub's GraphQL API. The **commits/yr** badge is a
 trailing-year total, not a weekly count. If that request fails, the PR, issue and
 commit badges show `?` instead of a misleading `0`, and the bar tooltip says the
-statistics are unavailable. Turning **Show GitHub repositories** off clears the
-cached GitHub list and badges.
+statistics are unavailable. Language data is fetched separately when the activity
+page opens; a failure says so explicitly instead of showing empty percentages.
+Turning **Show GitHub repositories** off clears the cached GitHub list, badges,
+activity and languages.
 
 The popup lists repositories that need attention: ahead, behind, changed, or
 whose last fetch failed. A failed fetch is shown on the repository's row, in
