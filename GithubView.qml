@@ -62,9 +62,11 @@ PanelKeyCatcher {
   readonly property bool showRemoteSection: filterMode === "all" || filterMode === "remote" || filterMode === "cloned" || filterMode === "notCloned"
   readonly property var repos: {
     var list = service ? service.affectedRepos : []
-    if (!showLocalSection) return []
-    if (query === "") return list
-    return list.filter(function(repo) {
+    if (!showLocalSection)
+      return []
+    if (query === "")
+      return list
+    return list.filter(function (repo) {
       return matchesQuery(repo.label) || matchesQuery(repo.path) || matchesQuery(Model.repositoryMeta(repo, FoamyI18n.t, FoamyI18n.tn))
     })
   }
@@ -72,17 +74,32 @@ PanelKeyCatcher {
     var rows = []
     var local = root.repos
     for (let i = 0; i < local.length; i++)
-      rows.push({ kind: "local", repo: local[i], localIndex: i })
+      rows.push({
+        kind: "local",
+        repo: local[i],
+        localIndex: i
+      })
     if (root.showLocalSection && local.length === 0)
-      rows.push({ kind: "localEmpty" })
+      rows.push({
+        kind: "localEmpty"
+      })
     if (root.showRemoteSection) {
-      rows.push({ kind: "remoteHeader" })
+      rows.push({
+        kind: "remoteHeader"
+      })
       if (root.githubError !== "")
-        rows.push({ kind: "remoteError" })
+        rows.push({
+          kind: "remoteError"
+        })
       if (!root.githubRefreshing && root.githubError === "" && root.githubRows.length === 0)
-        rows.push({ kind: "remoteEmpty" })
+        rows.push({
+          kind: "remoteEmpty"
+        })
       for (let j = 0; j < root.githubRows.length; j++)
-        rows.push({ kind: "remote", row: root.githubRows[j] })
+        rows.push({
+          kind: "remote",
+          row: root.githubRows[j]
+        })
     }
     return rows
   }
@@ -92,7 +109,7 @@ PanelKeyCatcher {
   readonly property bool hasFailures: sync.failures.length > 0
   function sortGithubRows(list) {
     var arr = (list || []).slice()
-    arr.sort(function(a, b) {
+    arr.sort(function (a, b) {
       var ra = a.remote || {}, rb = b.remote || {}
       if (sortMode === "name")
         return String(ra.nameWithOwner || "").toLowerCase().localeCompare(String(rb.nameWithOwner || "").toLowerCase())
@@ -101,8 +118,10 @@ PanelKeyCatcher {
       if (sortMode === "created") {
         let ca = Date.parse(ra.createdAt || ra.pushedAt || "") || 0
         let cb = Date.parse(rb.createdAt || rb.pushedAt || "") || 0
-        if (cb !== ca) return cb - ca
-      } else if (db !== da) return db - da
+        if (cb !== ca)
+          return cb - ca
+      } else if (db !== da)
+        return db - da
       return String(ra.nameWithOwner || "").toLowerCase().localeCompare(String(rb.nameWithOwner || "").toLowerCase())
     })
     return arr
@@ -110,18 +129,21 @@ PanelKeyCatcher {
 
   readonly property var githubRows: {
     var list = service ? service.githubRows : []
-    if (!showRemoteSection) return []
-    list = list.filter(function(row) {
-      if (filterMode === "cloned") return !!row.local
-      if (filterMode === "notCloned") return !row.local
+    if (!showRemoteSection)
+      return []
+    list = list.filter(function (row) {
+      if (filterMode === "cloned")
+        return !!row.local
+      if (filterMode === "notCloned")
+        return !row.local
       return true
     })
-    if (query !== "") list = list.filter(function(row) {
-      var r = row.remote || {}
-      var local = row.local || {}
-      return matchesQuery(r.nameWithOwner) || matchesQuery(r.description) || matchesQuery(r.url)
-        || matchesQuery(local.label) || matchesQuery(local.path)
-    })
+    if (query !== "")
+      list = list.filter(function (row) {
+        var r = row.remote || {}
+        var local = row.local || {}
+        return matchesQuery(r.nameWithOwner) || matchesQuery(r.description) || matchesQuery(r.url) || matchesQuery(local.label) || matchesQuery(local.path)
+      })
     return sortGithubRows(list)
   }
   // Total loaded GitHub repositories for the bar header and badge, independent
@@ -285,14 +307,19 @@ PanelKeyCatcher {
     function onIndexChanged() {
       var row = root.rowForStop(cursor.index)
       if (row < 0) {
-        if (cursor.index === root.settingsStop || cursor.index === root.pullAllStop) list.positionViewAtBeginning()
-        else if (cursor.index === root.refreshStop) list.positionViewAtEnd()
+        if (cursor.index === root.settingsStop || cursor.index === root.pullAllStop)
+          list.positionViewAtBeginning()
+        else if (cursor.index === root.refreshStop)
+          list.positionViewAtEnd()
         return
       }
       // find displayRows index for local row
       for (let i = 0; i < root.displayRows.length; i++) {
         let dr = root.displayRows[i]
-        if (dr.kind === "local" && dr.localIndex === row) { list.positionViewAtIndex(i, ListView.Contain); return }
+        if (dr.kind === "local" && dr.localIndex === row) {
+          list.positionViewAtIndex(i, ListView.Contain)
+          return
+        }
       }
     }
   }
@@ -492,10 +519,43 @@ PanelKeyCatcher {
           Layout.fillWidth: true
           spacing: FoamyStyle.gapSmall
           readonly property real cellWidth: (width - spacing * 3) / 4
-          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "box"; label: FoamyI18n.t("repos"); value: root.githubCount; tint: FoamyPalette.info }
-          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "git-branch"; label: FoamyI18n.t("open PRs"); value: root.service && root.service.githubStatsValid ? root.service.githubStats.openPRs : 0; unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid; tint: FoamyPalette.success; selectsSection: "pulls" }
-          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "circle-dot"; label: FoamyI18n.t("open issues"); value: root.service && root.service.githubStatsValid ? root.service.githubStats.openIssues : 0; unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid; tint: FoamyPalette.warning; selectsSection: "issues" }
-          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "activity"; label: FoamyI18n.t("commits/yr"); value: root.service && root.service.githubStatsValid && root.service.githubActivity.weekly ? root.service.githubActivity.weekly.commits : 0; unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid; tint: FoamyPalette.accent }
+          StatBadge {
+            width: parent.cellWidth
+            alwaysVisible: true
+            icon: "box"
+            label: FoamyI18n.t("repos")
+            value: root.githubCount
+            tint: FoamyPalette.info
+          }
+          StatBadge {
+            width: parent.cellWidth
+            alwaysVisible: true
+            icon: "git-branch"
+            label: FoamyI18n.t("open PRs")
+            value: root.service && root.service.githubStatsValid ? root.service.githubStats.openPRs : 0
+            unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid
+            tint: FoamyPalette.success
+            selectsSection: "pulls"
+          }
+          StatBadge {
+            width: parent.cellWidth
+            alwaysVisible: true
+            icon: "circle-dot"
+            label: FoamyI18n.t("open issues")
+            value: root.service && root.service.githubStatsValid ? root.service.githubStats.openIssues : 0
+            unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid
+            tint: FoamyPalette.warning
+            selectsSection: "issues"
+          }
+          StatBadge {
+            width: parent.cellWidth
+            alwaysVisible: true
+            icon: "activity"
+            label: FoamyI18n.t("commits/yr")
+            value: root.service && root.service.githubStatsValid && root.service.githubActivity.weekly ? root.service.githubActivity.weekly.commits : 0
+            unavailable: !!root.service && root.service.githubEnabled !== false && !root.service.githubStatsValid
+            tint: FoamyPalette.accent
+          }
         }
 
         // The contribution heatmap stays hidden: this popup is capped at 560px.
@@ -572,14 +632,31 @@ PanelKeyCatcher {
             foreground: FoamyPalette.text
             value: root.filterMode
             options: [
-              { value: "all", label: FoamyI18n.t("All") },
-              { value: "local", label: FoamyI18n.t("Local") },
-              { value: "remote", label: FoamyI18n.t("Remote") },
-              { value: "cloned", label: FoamyI18n.t("Cloned") },
-              { value: "notCloned", label: FoamyI18n.t("Not cloned") }
+              {
+                value: "all",
+                label: FoamyI18n.t("All")
+              },
+              {
+                value: "local",
+                label: FoamyI18n.t("Local")
+              },
+              {
+                value: "remote",
+                label: FoamyI18n.t("Remote")
+              },
+              {
+                value: "cloned",
+                label: FoamyI18n.t("Cloned")
+              },
+              {
+                value: "notCloned",
+                label: FoamyI18n.t("Not cloned")
+              }
             ]
             Accessible.name: filterLabel.text
-            onChanged: function (value) { root.filterMode = value }
+            onChanged: function (value) {
+              root.filterMode = value
+            }
           }
           Text {
             id: sortLabel
@@ -599,12 +676,23 @@ PanelKeyCatcher {
             foreground: FoamyPalette.text
             value: root.sortMode
             options: [
-              { value: "updated", label: FoamyI18n.t("Updated") },
-              { value: "name", label: FoamyI18n.t("Name") },
-              { value: "created", label: FoamyI18n.t("Created") }
+              {
+                value: "updated",
+                label: FoamyI18n.t("Updated")
+              },
+              {
+                value: "name",
+                label: FoamyI18n.t("Name")
+              },
+              {
+                value: "created",
+                label: FoamyI18n.t("Created")
+              }
             ]
             Accessible.name: sortLabel.text
-            onChanged: function (value) { root.sortMode = value }
+            onChanged: function (value) {
+              root.sortMode = value
+            }
           }
         }
 
@@ -614,9 +702,24 @@ PanelKeyCatcher {
           width: parent.width
           visible: root.totals.aheadRepos > 0 || root.totals.behindRepos > 0 || root.totals.dirtyRepos > 0
           spacing: FoamyStyle.gapSmall
-          StatBadge { icon: "arrow-up"; label: FoamyI18n.t("ahead"); value: root.totals.aheadRepos; tint: FoamyPalette.onSurface(FoamyPalette.success) }
-          StatBadge { icon: "arrow-down"; label: FoamyI18n.t("behind"); value: root.totals.behindRepos; tint: FoamyPalette.onSurface(FoamyPalette.info) }
-          StatBadge { icon: "pencil"; label: FoamyI18n.t("changed"); value: root.totals.dirtyRepos; tint: FoamyPalette.onSurface(FoamyPalette.warning) }
+          StatBadge {
+            icon: "arrow-up"
+            label: FoamyI18n.t("ahead")
+            value: root.totals.aheadRepos
+            tint: FoamyPalette.onSurface(FoamyPalette.success)
+          }
+          StatBadge {
+            icon: "arrow-down"
+            label: FoamyI18n.t("behind")
+            value: root.totals.behindRepos
+            tint: FoamyPalette.onSurface(FoamyPalette.info)
+          }
+          StatBadge {
+            icon: "pencil"
+            label: FoamyI18n.t("changed")
+            value: root.totals.dirtyRepos
+            tint: FoamyPalette.onSurface(FoamyPalette.warning)
+          }
         }
       }
 
@@ -683,12 +786,18 @@ PanelKeyCatcher {
         width: list.width
         sourceComponent: {
           var k = modelData ? modelData.kind : ""
-          if (k === "local") return localRowComp
-          if (k === "localEmpty") return localEmptyComp
-          if (k === "remoteHeader") return remoteHeaderComp
-          if (k === "remoteError") return remoteErrorComp
-          if (k === "remoteEmpty") return remoteEmptyComp
-          if (k === "remote") return remoteRowComp
+          if (k === "local")
+            return localRowComp
+          if (k === "localEmpty")
+            return localEmptyComp
+          if (k === "remoteHeader")
+            return remoteHeaderComp
+          if (k === "remoteError")
+            return remoteErrorComp
+          if (k === "remoteEmpty")
+            return remoteEmptyComp
+          if (k === "remote")
+            return remoteRowComp
           return null
         }
         // Inline components cannot see the delegate's id; hand them the row.
@@ -763,9 +872,7 @@ PanelKeyCatcher {
             Text {
               anchors.verticalCenter: parent.verticalCenter
               visible: !root.githubRefreshing && root.githubRows.length > 0
-              text: root.query !== "" || root.filterMode !== "all"
-                ? FoamyI18n.t("%1 of %2", [FoamyI18n.number(root.githubRows.length), FoamyI18n.number(root.githubCount)])
-                : FoamyI18n.number(root.githubCount)
+              text: root.query !== "" || root.filterMode !== "all" ? FoamyI18n.t("%1 of %2", [FoamyI18n.number(root.githubRows.length), FoamyI18n.number(root.githubCount)]) : FoamyI18n.number(root.githubCount)
               textFormat: Text.PlainText
               color: FoamyPalette.mutedText
               font.family: FoamyStyle.monoFamily
@@ -843,7 +950,9 @@ PanelKeyCatcher {
         label: FoamyI18n.t("Clone directory")
         value: String(root.settings.cloneDirectory || "~/repos")
         placeholderText: "~/repos"
-        onCommitted: function(value) { root.saveRequested("cloneDirectory", value) }
+        onCommitted: function (value) {
+          root.saveRequested("cloneDirectory", value)
+        }
       }
       FoamyNumberField {
         width: parent.width
@@ -852,7 +961,9 @@ PanelKeyCatcher {
         from: 1
         to: 120
         stepSize: 1
-        onCommitted: function(value) { root.saveRequested("githubRefreshMinutes", value) }
+        onCommitted: function (value) {
+          root.saveRequested("githubRefreshMinutes", value)
+        }
       }
       FoamyNumberField {
         width: parent.width
@@ -861,7 +972,9 @@ PanelKeyCatcher {
         from: 1
         to: 200
         stepSize: 1
-        onCommitted: function(value) { root.saveRequested("githubLimit", value) }
+        onCommitted: function (value) {
+          root.saveRequested("githubLimit", value)
+        }
       }
     }
 
@@ -1125,9 +1238,28 @@ PanelKeyCatcher {
       id: badgeRow
       anchors.centerIn: parent
       spacing: FoamyStyle.gapSmall
-      FoamyIcon { name: icon; width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall; color: tint; anchors.verticalCenter: parent.verticalCenter }
-      Text { text: unavailable ? "?" : FoamyI18n.number(value); textFormat: Text.PlainText; color: tint; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.bodySmall; font.weight: Font.DemiBold }
-      Text { text: label; textFormat: Text.PlainText; color: FoamyPalette.secondaryText; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.caption }
+      FoamyIcon {
+        name: icon
+        width: FoamyStyle.font.bodySmall
+        height: FoamyStyle.font.bodySmall
+        color: tint
+        anchors.verticalCenter: parent.verticalCenter
+      }
+      Text {
+        text: unavailable ? "?" : FoamyI18n.number(value)
+        textFormat: Text.PlainText
+        color: tint
+        font.family: FoamyStyle.fontFamily
+        font.pixelSize: FoamyStyle.font.bodySmall
+        font.weight: Font.DemiBold
+      }
+      Text {
+        text: label
+        textFormat: Text.PlainText
+        color: FoamyPalette.secondaryText
+        font.family: FoamyStyle.fontFamily
+        font.pixelSize: FoamyStyle.font.caption
+      }
     }
     MouseArea {
       anchors.fill: parent
@@ -1156,20 +1288,30 @@ PanelKeyCatcher {
       }
       Row {
         spacing: 3
-        Text { text: FoamyI18n.t("Less"); color: FoamyPalette.mutedText; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.caption; anchors.verticalCenter: parent.verticalCenter }
+        Text {
+          text: FoamyI18n.t("Less")
+          color: FoamyPalette.mutedText
+          font.family: FoamyStyle.fontFamily
+          font.pixelSize: FoamyStyle.font.caption
+          anchors.verticalCenter: parent.verticalCenter
+        }
         Repeater {
-          model: [0,1,2,3,4]
+          model: [0, 1, 2, 3, 4]
           Rectangle {
             required property int modelData
-            width: 8; height: 8; radius: 2
-            color: modelData === 0 ? Qt.alpha(FoamyPalette.text, 0.08)
-                 : modelData === 1 ? Qt.alpha(FoamyPalette.success, 0.28)
-                 : modelData === 2 ? Qt.alpha(FoamyPalette.success, 0.48)
-                 : modelData === 3 ? Qt.alpha(FoamyPalette.success, 0.72)
-                 : FoamyPalette.success
+            width: 8
+            height: 8
+            radius: 2
+            color: modelData === 0 ? Qt.alpha(FoamyPalette.text, 0.08) : modelData === 1 ? Qt.alpha(FoamyPalette.success, 0.28) : modelData === 2 ? Qt.alpha(FoamyPalette.success, 0.48) : modelData === 3 ? Qt.alpha(FoamyPalette.success, 0.72) : FoamyPalette.success
           }
         }
-        Text { text: FoamyI18n.t("More"); color: FoamyPalette.mutedText; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.caption; anchors.verticalCenter: parent.verticalCenter }
+        Text {
+          text: FoamyI18n.t("More")
+          color: FoamyPalette.mutedText
+          font.family: FoamyStyle.fontFamily
+          font.pixelSize: FoamyStyle.font.caption
+          anchors.verticalCenter: parent.verticalCenter
+        }
       }
     }
 
@@ -1192,16 +1334,13 @@ PanelKeyCatcher {
               model: modelData
               delegate: Rectangle {
                 required property var modelData
-                width: 8; height: 8; radius: 2
+                width: 8
+                height: 8
+                radius: 2
                 color: {
                   var l = Number(modelData.level || 0)
-                  return l <= 0 ? Qt.alpha(FoamyPalette.text, 0.08)
-                       : l === 1 ? Qt.alpha(FoamyPalette.success, 0.28)
-                       : l === 2 ? Qt.alpha(FoamyPalette.success, 0.48)
-                       : l === 3 ? Qt.alpha(FoamyPalette.success, 0.72)
-                       : FoamyPalette.success
+                  return l <= 0 ? Qt.alpha(FoamyPalette.text, 0.08) : l === 1 ? Qt.alpha(FoamyPalette.success, 0.28) : l === 2 ? Qt.alpha(FoamyPalette.success, 0.48) : l === 3 ? Qt.alpha(FoamyPalette.success, 0.72) : FoamyPalette.success
                 }
-
               }
             }
           }
@@ -1210,7 +1349,6 @@ PanelKeyCatcher {
     }
   }
 
-
   component GithubRemoteRow: FoamyCursorSurface {
     id: remoteRow
     property var row: null
@@ -1218,22 +1356,27 @@ PanelKeyCatcher {
     readonly property var local: row ? row.local : null
     readonly property bool cloned: !!local
     readonly property string meta: {
-      if (!remote) return ""
+      if (!remote)
+        return ""
       var bits = []
       bits.push(remote.isPrivate ? FoamyI18n.t("Private") : FoamyI18n.t("Public"))
-      if (remote.isFork) bits.push(FoamyI18n.t("Fork"))
-      if (remote.isArchived) bits.push(FoamyI18n.t("Archived"))
-      if (remote.pushedAt) bits.push(FoamyI18n.t("Pushed %1", [Model.relativeTime(Date.parse(remote.pushedAt) / 1000, root.now, FoamyI18n.t)]))
-      if (cloned && local.complete !== false) bits.push(Model.repositoryMeta(local, FoamyI18n.t, FoamyI18n.tn))
-      else if (cloned) bits.push(FoamyI18n.t("Local status unavailable"))
-      else bits.push(FoamyI18n.t("Not cloned"))
+      if (remote.isFork)
+        bits.push(FoamyI18n.t("Fork"))
+      if (remote.isArchived)
+        bits.push(FoamyI18n.t("Archived"))
+      if (remote.pushedAt)
+        bits.push(FoamyI18n.t("Pushed %1", [Model.relativeTime(Date.parse(remote.pushedAt) / 1000, root.now, FoamyI18n.t)]))
+      if (cloned && local.complete !== false)
+        bits.push(Model.repositoryMeta(local, FoamyI18n.t, FoamyI18n.tn))
+      else if (cloned)
+        bits.push(FoamyI18n.t("Local status unavailable"))
+      else
+        bits.push(FoamyI18n.t("Not cloned"))
       return bits.join(" · ")
     }
     // Plain Rows/Columns: a RowLayout here polishes in a loop when GitHub data
     // refreshes, which freezes the shell.
-    height: FoamyStyle.rowPadding * 2 + Math.max(FoamyStyle.controlHeight,
-      titleText.implicitHeight + (descText.visible ? descText.implicitHeight + FoamyStyle.gapTiny : 0)
-      + FoamyStyle.gapTiny + metaText.implicitHeight)
+    height: FoamyStyle.rowPadding * 2 + Math.max(FoamyStyle.controlHeight, titleText.implicitHeight + (descText.visible ? descText.implicitHeight + FoamyStyle.gapTiny : 0) + FoamyStyle.gapTiny + metaText.implicitHeight)
     hasCursor: false
 
     Row {
@@ -1263,10 +1406,7 @@ PanelKeyCatcher {
           height: titleText.implicitHeight
           Text {
             id: titleText
-            width: Math.max(0, parent.width - (privateIcon.visible ? privateIcon.width : 0)
-              - (forkIcon.visible ? forkIcon.width : 0) - (archiveIcon.visible ? archiveIcon.width : 0)
-              - (privateIcon.visible ? parent.spacing : 0) - (forkIcon.visible ? parent.spacing : 0)
-              - (archiveIcon.visible ? parent.spacing : 0))
+            width: Math.max(0, parent.width - (privateIcon.visible ? privateIcon.width : 0) - (forkIcon.visible ? forkIcon.width : 0) - (archiveIcon.visible ? archiveIcon.width : 0) - (privateIcon.visible ? parent.spacing : 0) - (forkIcon.visible ? parent.spacing : 0) - (archiveIcon.visible ? parent.spacing : 0))
             anchors.verticalCenter: parent.verticalCenter
             text: remote ? String(remote.nameWithOwner) : ""
             textFormat: Text.PlainText
@@ -1280,7 +1420,8 @@ PanelKeyCatcher {
             id: privateIcon
             visible: !!remote && remote.isPrivate
             name: "lock"
-            width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall
+            width: FoamyStyle.font.bodySmall
+            height: FoamyStyle.font.bodySmall
             color: FoamyPalette.info
             anchors.verticalCenter: parent.verticalCenter
           }
@@ -1288,7 +1429,8 @@ PanelKeyCatcher {
             id: forkIcon
             visible: !!remote && remote.isFork
             name: "git-fork"
-            width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall
+            width: FoamyStyle.font.bodySmall
+            height: FoamyStyle.font.bodySmall
             color: FoamyPalette.secondaryText
             anchors.verticalCenter: parent.verticalCenter
           }
@@ -1296,7 +1438,8 @@ PanelKeyCatcher {
             id: archiveIcon
             visible: !!remote && remote.isArchived
             name: "archive"
-            width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall
+            width: FoamyStyle.font.bodySmall
+            height: FoamyStyle.font.bodySmall
             color: FoamyPalette.mutedText
             anchors.verticalCenter: parent.verticalCenter
           }
@@ -1319,7 +1462,8 @@ PanelKeyCatcher {
           FoamyIcon {
             id: metaIcon
             name: remoteRow.cloned ? "check" : "download"
-            width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall
+            width: FoamyStyle.font.bodySmall
+            height: FoamyStyle.font.bodySmall
             color: remoteRow.cloned ? FoamyPalette.success : FoamyPalette.secondaryText
             anchors.verticalCenter: parent.verticalCenter
           }
@@ -1346,7 +1490,8 @@ PanelKeyCatcher {
           tooltipText: FoamyI18n.t("Open on GitHub")
           enabled: !!remote
           foreground: FoamyPalette.secondaryText
-          onClicked: if (root.service) root.service.openGithubUrl(remote)
+          onClicked: if (root.service)
+            root.service.openGithubUrl(remote)
         }
         FoamyAction {
           visible: !remoteRow.cloned
@@ -1354,7 +1499,8 @@ PanelKeyCatcher {
           tooltipText: FoamyI18n.t("Clone repository")
           enabled: !!remote && !!root.service && !root.service.repositoryActionRunning
           foreground: FoamyPalette.secondaryText
-          onClicked: if (root.service) root.service.cloneGithubRepo(remote)
+          onClicked: if (root.service)
+            root.service.cloneGithubRepo(remote)
         }
         FoamyAction {
           visible: remoteRow.cloned
@@ -1362,7 +1508,8 @@ PanelKeyCatcher {
           tooltipText: FoamyI18n.t("Pull %1", [remote ? String(remote.nameWithOwner) : ""])
           enabled: !!root.service && Model.canPull(local)
           foreground: FoamyPalette.secondaryText
-          onClicked: if (root.service && local) root.service.pullRepository(local)
+          onClicked: if (root.service && local)
+            root.service.pullRepository(local)
         }
         FoamyAction {
           visible: remoteRow.cloned
@@ -1370,7 +1517,8 @@ PanelKeyCatcher {
           tooltipText: FoamyI18n.t("Fetch %1", [remote ? String(remote.nameWithOwner) : ""])
           enabled: !!root.service && !root.busy
           foreground: FoamyPalette.secondaryText
-          onClicked: if (root.service) root.service.fetch()
+          onClicked: if (root.service)
+            root.service.fetch()
         }
         FoamyAction {
           visible: remoteRow.cloned
@@ -1378,7 +1526,8 @@ PanelKeyCatcher {
           tooltipText: FoamyI18n.t("Open in lazygit")
           enabled: !!remoteRow.cloned
           foreground: FoamyPalette.secondaryText
-          onClicked: if (root.service) root.service.openGithubLocal(row)
+          onClicked: if (root.service)
+            root.service.openGithubLocal(row)
         }
       }
     }

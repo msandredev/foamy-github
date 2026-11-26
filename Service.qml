@@ -42,12 +42,20 @@ Item {
   property bool githubRefreshing: false
   property string githubError: ""
   property string githubActionStatus: ""
-  property var githubStats: ({ repoCount: 0, openPRs: 0, openIssues: 0 })
+  property var githubStats: ({
+      repoCount: 0,
+      openPRs: 0,
+      openIssues: 0
+    })
   // Zeros are not an answer until a GraphQL reply has actually been accepted.
   property bool githubStatsValid: false
   property string githubStatsError: ""
   property bool githubStatsRefreshing: false
-  property var githubActivity: ({ calendar: null, weekly: null, login: "" })
+  property var githubActivity: ({
+      calendar: null,
+      weekly: null,
+      login: ""
+    })
   property bool githubActivityRefreshing: false
   // Each process is tied to the request that started it, so a late exit from a
   // cancelled or timed-out child cannot complete the next request.
@@ -61,7 +69,8 @@ Item {
   Component.onCompleted: root.serviceReady = true
   // A property change can fire before the child processes exist; only a live
   // settings change needs to clear cached GitHub data.
-  onGithubEnabledChanged: if (root.serviceReady && !root.githubEnabled) root.cancelGithubWork()
+  onGithubEnabledChanged: if (root.serviceReady && !root.githubEnabled)
+    root.cancelGithubWork()
   readonly property string cloneDirectory: Model.normalizeCloneDirectory(preferences.cloneDirectory, homeDir)
   readonly property var githubRepos: githubStatus.repos || []
   readonly property var githubRows: Model.githubRows(githubRepos, repos, cloneDirectory, homeDir)
@@ -501,10 +510,18 @@ Item {
     githubStatsRefreshing = false
     githubStatus = Model.defaultGithub()
     githubError = ""
-    githubStats = { repoCount: 0, openPRs: 0, openIssues: 0 }
+    githubStats = {
+      repoCount: 0,
+      openPRs: 0,
+      openIssues: 0
+    }
     githubStatsValid = false
     githubStatsError = ""
-    githubActivity = { calendar: null, weekly: null, login: "" }
+    githubActivity = {
+      calendar: null,
+      weekly: null,
+      login: ""
+    }
   }
 
   function failGithubStats(message) {
@@ -513,15 +530,15 @@ Item {
   }
 
   function refreshGithub() {
-    if (!root.active || !root.githubEnabled) return
+    if (!root.active || !root.githubEnabled)
+      return
     if (!githubRefreshing) {
       root.githubOperationId++
       githubRefreshing = true
       githubError = ""
       let id = root.githubOperationId
       githubProcess.operationId = id
-      githubProcess.command = ["gh", "repo", "list", "--limit", String(root.githubLimit),
-        "--json", "name,nameWithOwner,owner,description,url,sshUrl,isPrivate,isFork,isArchived,pushedAt,createdAt,updatedAt,viewerPermission"]
+      githubProcess.command = ["gh", "repo", "list", "--limit", String(root.githubLimit), "--json", "name,nameWithOwner,owner,description,url,sshUrl,isPrivate,isFork,isArchived,pushedAt,createdAt,updatedAt,viewerPermission"]
       githubProcess.running = true
       githubDeadline.restart()
       // Quickshell may not emit `exited` when a command fails to start.
@@ -545,16 +562,31 @@ Item {
     var message = String(detail || tr("GitHub command failed (exit %1).", [String(exitCode)])).trim().slice(0, 240)
     if (exitCode !== 0) {
       githubError = message
-      githubStatus = { ok: false, error: message, repos: [], lastChecked: 0 }
+      githubStatus = {
+        ok: false,
+        error: message,
+        repos: [],
+        lastChecked: 0
+      }
       return
     }
     var parsed = Model.parseGithubRepos(githubOutput.text)
     if (!parsed.ok) {
       githubError = parsed.error
-      githubStatus = { ok: false, error: parsed.error, repos: [], lastChecked: 0 }
+      githubStatus = {
+        ok: false,
+        error: parsed.error,
+        repos: [],
+        lastChecked: 0
+      }
       return
     }
-    githubStatus = { ok: true, error: "", repos: parsed.repos, lastChecked: Date.now() / 1000 }
+    githubStatus = {
+      ok: true,
+      error: "",
+      repos: parsed.repos,
+      lastChecked: Date.now() / 1000
+    }
     githubError = ""
   }
 
@@ -600,9 +632,11 @@ Item {
   }
 
   function cloneGithubRepo(remote) {
-    if (!remote || root.repositoryActionRunning || githubCloneProcess.running) return false
+    if (!remote || root.repositoryActionRunning || githubCloneProcess.running)
+      return false
     var target = Model.githubClonePath(root.cloneDirectory, remote, root.homeDir)
-    if (!target) return false
+    if (!target)
+      return false
     repositoryActionRunning = true
     operationError = ""
     actionMessageTimer.stop()
@@ -614,12 +648,15 @@ Item {
 
   function openGithubUrl(remote) {
     var url = remote ? String(remote.url || "") : ""
-    if (/^https:\/\/github\.com\//.test(url)) Qt.openUrlExternally(url)
+    if (/^https:\/\/github\.com\//.test(url))
+      Qt.openUrlExternally(url)
   }
 
   function openGithubLocal(row) {
-    if (row && row.local && row.local.path) root.openRepository(row.local)
-    else if (row && row.clonePath) Quickshell.execDetached(["uwsm-app", "--", "xdg-terminal-exec", "--app-id=org.omarchy.terminal", "--title=repo - " + String(row.remote.nameWithOwner || "repository"), "-e", "bash", "-c", 'cd -- "$(dirname "$1")" && exec bash', "_", String(row.clonePath)])
+    if (row && row.local && row.local.path)
+      root.openRepository(row.local)
+    else if (row && row.clonePath)
+      Quickshell.execDetached(["uwsm-app", "--", "xdg-terminal-exec", "--app-id=org.omarchy.terminal", "--title=repo - " + String(row.remote.nameWithOwner || "repository"), "-e", "bash", "-c", 'cd -- "$(dirname "$1")" && exec bash', "_", String(row.clonePath)])
   }
 
   Timer {
@@ -781,7 +818,9 @@ Item {
     // published by finishGithub instead of buffering untrusted stderr.
     stderr: SplitParser {
       splitMarker: ""
-      onRead: function (data) { void data }
+      onRead: function (data) {
+        void data
+      }
     }
     onExited: function (exitCode) {
       root.finishGithub(githubProcess.operationId, exitCode)
@@ -798,10 +837,15 @@ Item {
   Process {
     id: githubStatsProcess
     property int operationId: -1
-    stdout: StdioCollector { id: githubStatsOutput; waitForEnd: true }
+    stdout: StdioCollector {
+      id: githubStatsOutput
+      waitForEnd: true
+    }
     stderr: SplitParser {
       splitMarker: ""
-      onRead: function (data) { void data }
+      onRead: function (data) {
+        void data
+      }
     }
     onExited: function (exitCode) {
       root.finishGithubStats(githubStatsProcess.operationId, exitCode)
@@ -817,11 +861,18 @@ Item {
 
   Process {
     id: githubCloneProcess
-    stdout: StdioCollector { id: githubCloneOutput; waitForEnd: true }
-    stderr: StdioCollector { id: githubCloneError; waitForEnd: true }
+    stdout: StdioCollector {
+      id: githubCloneOutput
+      waitForEnd: true
+    }
+    stderr: StdioCollector {
+      id: githubCloneError
+      waitForEnd: true
+    }
     onExited: function (exitCode) {
       root.repositoryActionRunning = false
-      if (!root.active) return
+      if (!root.active)
+        return
       var out = String(githubCloneOutput.text || "")
       if (exitCode === 0 && out.indexOf("__EXISTS__") !== -1) {
         root.setActionStatus("Repository already exists locally")
