@@ -29,7 +29,7 @@ skip() { echo "SKIP $*"; }
 # test_clipboard.py's QML case skips itself when this is set.
 if ((ci)); then export FOAMY_SUITE_CI=1; fi
 
-run node --test tests/model.test.js tests/preferences.test.js tests/items.test.js
+run node --test tests/model.test.js tests/preferences.test.js tests/items.test.js tests/summary.test.js
 run node tests/i18n.test.cjs
 run python3 -I -m unittest discover -s tests -p 'test_*.py'
 

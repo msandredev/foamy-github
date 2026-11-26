@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Ui
 import "kit"
 import "Model.js" as Model
+import "GithubSummary.js" as GithubSummary
 import "Preferences.js" as Schema
 import "kit/FoamyPrefs.js" as Prefs
 
@@ -124,6 +125,15 @@ PanelKeyCatcher {
     })
     return sortGithubRows(list)
   }
+  // Total loaded GitHub repositories for the bar header and badge, independent
+  // of search/filter. The list heading still shows the visible row count, so
+  // the two numbers answer different questions by design.
+  readonly property int githubCount: {
+    if (!service || service.githubEnabled === false)
+      return 0
+    var stats = Number((service.githubStats && service.githubStats.repoCount) || 0)
+    return stats > 0 ? stats : (service.githubRows || []).length
+  }
   readonly property string githubError: service ? (service.githubError || "") : ""
   readonly property bool githubRefreshing: !!service && service.githubRefreshing
   // Cursor stops: each row, then its "LFS" button when the repository uses
@@ -165,7 +175,7 @@ PanelKeyCatcher {
     if (service.lastChecked === 0)
       return FoamyI18n.t("Checking repositories…")
     if (service.status.repoCount === 0)
-      return FoamyI18n.t("No repositories found")
+      return GithubSummary.emptyText(service.status.repoCount, root.githubCount, FoamyI18n.t)
     if (service.status.affectedCount === 0 && !sync.stale && !hasFailures)
       return FoamyI18n.t("Everything is in sync")
     if (service.status.affectedCount === 0 && !hasFailures)
@@ -483,7 +493,7 @@ PanelKeyCatcher {
           Layout.fillWidth: true
           spacing: FoamyStyle.gapSmall
           readonly property real cellWidth: (width - spacing * 3) / 4
-          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "box"; label: FoamyI18n.t("repos"); value: root.service ? (root.service.githubStats.repoCount || root.githubRows.length) : 0; tint: FoamyPalette.info }
+          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "box"; label: FoamyI18n.t("repos"); value: root.githubCount; tint: FoamyPalette.info }
           StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "git-branch"; label: FoamyI18n.t("open PRs"); value: root.service ? root.service.githubStats.openPRs : 0; tint: FoamyPalette.success; selectsSection: "pulls" }
           StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "circle-dot"; label: FoamyI18n.t("open issues"); value: root.service ? root.service.githubStats.openIssues : 0; tint: FoamyPalette.warning; selectsSection: "issues" }
           StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "activity"; label: FoamyI18n.t("commits"); value: root.service && root.service.githubActivity.weekly ? root.service.githubActivity.weekly.commits : 0; tint: FoamyPalette.accent }
