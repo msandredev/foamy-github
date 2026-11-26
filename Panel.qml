@@ -326,6 +326,8 @@ Panel {
     bar: root.bar
     owner: root
     open: root.opened
+    wide: true
+    maxHeight: Style.space(560)
     body: Component {
       GithubView {
         service: Service

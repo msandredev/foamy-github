@@ -1,3 +1,4 @@
 GithubView 1.0 GithubView.qml
+GithubItemsView 1.0 GithubItemsView.qml
 Panel 1.0 Panel.qml
 singleton Service 1.0 Service.qml

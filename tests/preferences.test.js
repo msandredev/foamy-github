@@ -65,6 +65,7 @@ test('the schema mirrors the manifest schema and defaults', () => {
 test('the service reads settings through the schema: an invalid value is the default, 0 turns refresh off', () => {
   const read = settings => plain(Prefs.values(fields, settings))
   assert.deepEqual(read({}), {inotifyEnabled:true, refreshIntervalSec:30, fetchIntervalSec:900,
+    githubEnabled:true, githubRefreshMinutes:5, githubLimit:100, cloneDirectory:'~/repos',
     trustRepositoryConfig:false, trustedRepositories:[], repositoryFolders:[]})
   assert.equal(read({refreshIntervalSec:0}).refreshIntervalSec, 0)
   assert.equal(read({refreshIntervalSec:5}).refreshIntervalSec, 5)
@@ -76,6 +77,9 @@ test('the service reads settings through the schema: an invalid value is the def
   assert.equal(read({inotifyEnabled:'false'}).inotifyEnabled, true)
   assert.equal(read({trustRepositoryConfig:true}).trustRepositoryConfig, true)
   assert.equal(read({trustRepositoryConfig:'true'}).trustRepositoryConfig, false)
+  assert.equal(read({githubEnabled:false}).githubEnabled, false)
+  for (const value of [0, 121, '5']) assert.equal(read({githubRefreshMinutes:value}).githubRefreshMinutes, 5, String(value))
+  for (const value of [0, 201, '100']) assert.equal(read({githubLimit:value}).githubLimit, 100, String(value))
 })
 
 test('repository folders and trusted repositories reach the helpers only when valid', () => {

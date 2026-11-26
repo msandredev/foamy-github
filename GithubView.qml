@@ -3,7 +3,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
-import qs.Commons as Commons
 import qs.Ui
 import "kit"
 import "Model.js" as Model
@@ -28,6 +27,10 @@ PanelKeyCatcher {
   property bool foldersLocked: false
   property bool trustLocked: false
   property double now: Date.now()
+  property string searchText: ""
+  property string filterMode: "all" // all, local, remote, cloned, notCloned
+  property string sortMode: "updated" // updated, name, created
+  property string section: "repos" // repos, pulls, issues
 
   signal closeRequestedByView
   signal settingsRequested
@@ -42,12 +45,85 @@ PanelKeyCatcher {
   signal repositoryRequested(var repo)
   signal trustRequested(var repo, bool trusted)
 
-  readonly property var repos: service ? service.affectedRepos : []
+  readonly property string query: String(searchText || "").trim().toLowerCase()
+  function matchesQuery(text) {
+    return query === "" || String(text || "").toLowerCase().indexOf(query) !== -1
+  }
+  // Clicking the active badge returns to repositories; the other two switch
+  // the body to the bounded Pull requests / Issues page.
+  function setSection(next) {
+    var target = next === root.section ? "repos" : next
+    if (target !== "repos" && target !== "pulls" && target !== "issues")
+      return
+    root.section = target
+    cursor.reset()
+  }
+  readonly property bool showLocalSection: filterMode === "all" || filterMode === "local"
+  readonly property bool showRemoteSection: filterMode === "all" || filterMode === "remote" || filterMode === "cloned" || filterMode === "notCloned"
+  readonly property var repos: {
+    var list = service ? service.affectedRepos : []
+    if (!showLocalSection) return []
+    if (query === "") return list
+    return list.filter(function(repo) {
+      return matchesQuery(repo.label) || matchesQuery(repo.path) || matchesQuery(Model.repositoryMeta(repo, FoamyI18n.t, FoamyI18n.tn))
+    })
+  }
+  readonly property var displayRows: {
+    var rows = []
+    var local = root.repos
+    for (var i = 0; i < local.length; i++)
+      rows.push({ kind: "local", repo: local[i], localIndex: i })
+    if (root.showLocalSection && local.length === 0)
+      rows.push({ kind: "localEmpty" })
+    if (root.showRemoteSection) {
+      rows.push({ kind: "remoteHeader" })
+      if (root.githubError !== "")
+        rows.push({ kind: "remoteError" })
+      if (!root.githubRefreshing && root.githubError === "" && root.githubRows.length === 0)
+        rows.push({ kind: "remoteEmpty" })
+      for (var j = 0; j < root.githubRows.length; j++)
+        rows.push({ kind: "remote", row: root.githubRows[j] })
+    }
+    return rows
+  }
   readonly property var totals: service ? service.totals : Model.defaultStatus().totals
   readonly property var sync: service ? service.sync : Model.defaultStatus().sync
   readonly property bool busy: !!service && service.busy
   readonly property bool hasFailures: sync.failures.length > 0
-  readonly property var githubRows: service ? service.githubRows : []
+  function sortGithubRows(list) {
+    var arr = (list || []).slice()
+    arr.sort(function(a, b) {
+      var ra = a.remote || {}, rb = b.remote || {}
+      if (sortMode === "name")
+        return String(ra.nameWithOwner || "").toLowerCase().localeCompare(String(rb.nameWithOwner || "").toLowerCase())
+      var da = Date.parse(ra.pushedAt || ra.updatedAt || ra.createdAt || "") || 0
+      var db = Date.parse(rb.pushedAt || rb.updatedAt || rb.createdAt || "") || 0
+      if (sortMode === "created") {
+        var ca = Date.parse(ra.createdAt || ra.pushedAt || "") || 0
+        var cb = Date.parse(rb.createdAt || rb.pushedAt || "") || 0
+        if (cb !== ca) return cb - ca
+      } else if (db !== da) return db - da
+      return String(ra.nameWithOwner || "").toLowerCase().localeCompare(String(rb.nameWithOwner || "").toLowerCase())
+    })
+    return arr
+  }
+
+  readonly property var githubRows: {
+    var list = service ? service.githubRows : []
+    if (!showRemoteSection) return []
+    list = list.filter(function(row) {
+      if (filterMode === "cloned") return !!row.local
+      if (filterMode === "notCloned") return !row.local
+      return true
+    })
+    if (query !== "") list = list.filter(function(row) {
+      var r = row.remote || {}
+      var local = row.local || {}
+      return matchesQuery(r.nameWithOwner) || matchesQuery(r.description) || matchesQuery(r.url)
+        || matchesQuery(local.label) || matchesQuery(local.path)
+    })
+    return sortGithubRows(list)
+  }
   readonly property string githubError: service ? (service.githubError || "") : ""
   readonly property bool githubRefreshing: !!service && service.githubRefreshing
   // Cursor stops: each row, then its "LFS" button when the repository uses
@@ -104,8 +180,11 @@ PanelKeyCatcher {
   readonly property string lastSyncText: FoamyI18n.t("Last remote sync %1", [Model.relativeTime(sync.lastSuccess, now, FoamyI18n.t)])
 
   implicitWidth: FoamyStyle.popupWidth
-  implicitHeight: editingSettings ? settingsPage.implicitHeight : list.contentHeight
-  blocked: editingSettings
+  implicitHeight: editingSettings ? settingsPage.implicitHeight : 560
+  // While the search field or a dropdown owns keys, the panel cursor must
+  // freeze; otherwise typing letters also triggers panel shortcuts and the
+  // filter never feels live.
+  blocked: editingSettings || (root.section === "repos" && (searchField.inputActiveFocus || filterSelect.triggerItem.activeFocus || sortSelect.triggerItem.activeFocus || filterSelect.popupOpen || sortSelect.popupOpen))
 
   // rows (+ LFS, trust), pull all, settings, refresh
   FoamyCursor {
@@ -114,14 +193,37 @@ PanelKeyCatcher {
   }
 
   onMoveRequested: function (dx, dy) {
+    if (root.section !== "repos") {
+      // Left/h returns to repositories; right/l stays inert because the item
+      // list has no second level. Vertical keys drive the item cursor.
+      if (dx < 0)
+        root.setSection("repos")
+      else if (dy !== 0)
+        itemsPage.move(dy)
+      return
+    }
     cursor.move(dy !== 0 ? dy : dx)
   }
-  onActivateRequested: root.activate(cursor.index)
+  onActivateRequested: {
+    if (root.section !== "repos")
+      itemsPage.activate()
+    else
+      root.activate(cursor.index)
+  }
   onCloseRequested: root.closeRequestedByView()
   onTabRequested: function (direction) {
     root.switchPanelRequested(direction)
   }
   onTextKey: function (text) {
+    if (root.section !== "repos") {
+      // Qt reports Backspace as U+0008 (and some platforms U+007F) through
+      // PanelKeyCatcher's textKey.
+      if (text === "\b" || text === "\u007f")
+        root.setSection("repos")
+      else if (text === "s" || text === "S")
+        root.settingsRequested()
+      return
+    }
     if (text === "s" || text === "S")
       root.settingsRequested()
     else if ((text === "r" || text === "R") && !root.busy)
@@ -129,10 +231,31 @@ PanelKeyCatcher {
     else if (text === "p" || text === "P")
       root.pullAll()
   }
-  onOpenedChanged: if (!opened) {
-    cursor.reset()
-    lfsNotePath = ""
+  onOpenedChanged: {
+    if (opened) {
+      // Type-to-filter should work as soon as the popup opens. Defer twice so
+      // the host's own focus priming cannot put the cursor back on the panel.
+      Qt.callLater(function () {
+        Qt.callLater(root.section === "repos" ? searchField.focusInput : itemsPage.forceActiveFocus)
+      })
+    } else {
+      cursor.reset()
+      lfsNotePath = ""
+      searchText = ""
+      filterMode = "all"
+      root.section = "repos"
+    }
   }
+  onSectionChanged: {
+    cursor.reset()
+    if (!root.opened)
+      return
+    Qt.callLater(function () {
+      Qt.callLater(root.section === "repos" ? searchField.focusInput : itemsPage.forceActiveFocus)
+    })
+  }
+  onSearchTextChanged: cursor.reset()
+  onFilterModeChanged: cursor.reset()
   onEditingSettingsChanged: {
     if (editingSettings) {
       loadFolders()
@@ -140,7 +263,10 @@ PanelKeyCatcher {
       Qt.callLater(settingsPage.focusBack)
     } else {
       Qt.callLater(function () {
-        root.forceActiveFocus()
+        if (root.section === "repos")
+          searchField.focusInput()
+        else
+          itemsPage.forceActiveFocus()
       })
     }
   }
@@ -149,12 +275,16 @@ PanelKeyCatcher {
     target: cursor
     function onIndexChanged() {
       var row = root.rowForStop(cursor.index)
-      if (row >= 0)
-        list.positionViewAtIndex(row, ListView.Contain)
-      else if (cursor.index === root.settingsStop || cursor.index === root.pullAllStop)
-        list.positionViewAtBeginning()
-      else if (cursor.index === root.refreshStop)
-        list.positionViewAtEnd()
+      if (row < 0) {
+        if (cursor.index === root.settingsStop || cursor.index === root.pullAllStop) list.positionViewAtBeginning()
+        else if (cursor.index === root.refreshStop) list.positionViewAtEnd()
+        return
+      }
+      // find displayRows index for local row
+      for (var i = 0; i < root.displayRows.length; i++) {
+        var dr = root.displayRows[i]
+        if (dr.kind === "local" && dr.localIndex === row) { list.positionViewAtIndex(i, ListView.Contain); return }
+      }
     }
   }
 
@@ -297,38 +427,18 @@ PanelKeyCatcher {
     })
   }
 
-  // ---- repository list ------------------------------------------------------------
-  ListView {
-    id: list
+  Column {
+    id: mainColumn
     visible: !root.editingSettings
     anchors.fill: parent
-    clip: true
-    boundsBehavior: Flickable.StopAtBounds
-    interactive: contentHeight > height
-    // Rows are virtualised: only visible repositories are instantiated.
-    model: root.editingSettings ? [] : root.repos
-    cacheBuffer: 0
-    // A wheel notch scrolls about three rows, however the mouse splits it.
-    FoamyWheelScroll {
-      id: wheel
-      target: list
-    }
-    ScrollBar.vertical: ScrollBar {
-      visible: list.interactive
-      width: FoamyStyle.gapSmall
-      padding: 0
-      contentItem: Rectangle {
-        implicitWidth: FoamyStyle.gapSmall
-        radius: FoamyStyle.pillRadius(width)
-        color: FoamyPalette.mutedText
-      }
-      background: Item {}
-    }
+    spacing: 0
 
-    header: Column {
-      width: list.width
-      // The foamy hero band: title row on the tinted wash, the repository
-      // summary (ahead / behind / changed / failed) in its hero slot.
+    // Fixed top: hero, search, filters.
+    Column {
+      id: fixedHeader
+      width: parent.width
+      spacing: 0
+
       FoamyHeroBand {
         id: band
         width: parent.width
@@ -343,6 +453,18 @@ PanelKeyCatcher {
         }
         trailing: [
           FoamyAction {
+            objectName: "refreshAction"
+            iconName: "refresh-cw"
+            spinning: !!root.service && (root.service.syncing || root.service.refreshing || root.service.githubRefreshing)
+            tooltipText: root.busy ? FoamyI18n.t("Refreshing…") : FoamyI18n.t("Fetch remotes and refresh")
+            actionEnabled: !root.busy
+            hasCursor: cursor.at(root.refreshStop)
+            foreground: FoamyPalette.secondaryText
+            onHoveredChanged: if (hovered)
+              cursor.hover(root.refreshStop)
+            onClicked: root.activate(root.refreshStop)
+          },
+          FoamyAction {
             objectName: "pullAllAction"
             visible: root.showPullAll
             iconName: "arrow-down-to-line"
@@ -355,171 +477,330 @@ PanelKeyCatcher {
             onClicked: root.pullAll()
           }
         ]
-        Flow {
+        // Fixed cells keep the band a stable height while data refreshes;
+        // a wrapping Flow made the header jump between one and three rows.
+        Row {
           Layout.fillWidth: true
-          spacing: FoamyStyle.padding
-          SummaryCount {
-            value: root.totals.aheadRepos
-            label: FoamyI18n.t("ahead")
-            symbol: "↑"
-            tint: FoamyPalette.onSurface(FoamyPalette.success)
-          }
-          SummaryCount {
-            value: root.totals.behindRepos
-            label: FoamyI18n.t("behind")
-            symbol: "↓"
-            tint: FoamyPalette.onSurface(FoamyPalette.info)
-          }
-          SummaryCount {
-            value: root.totals.dirtyRepos
-            label: FoamyI18n.t("changed")
-            symbol: "•"
-            tint: FoamyPalette.onSurface(FoamyPalette.warning)
-          }
-          SummaryCount {
-            visible: value > 0
-            value: root.totals.failedRepos
-            label: FoamyI18n.t("failed")
-            symbol: "!"
-            tint: FoamyPalette.onSurface(FoamyPalette.error)
-          }
+          spacing: FoamyStyle.gapSmall
+          readonly property real cellWidth: (width - spacing * 3) / 4
+          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "box"; label: FoamyI18n.t("repos"); value: root.service ? (root.service.githubStats.repoCount || root.githubRows.length) : 0; tint: FoamyPalette.info }
+          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "git-branch"; label: FoamyI18n.t("open PRs"); value: root.service ? root.service.githubStats.openPRs : 0; tint: FoamyPalette.success; selectsSection: "pulls" }
+          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "circle-dot"; label: FoamyI18n.t("open issues"); value: root.service ? root.service.githubStats.openIssues : 0; tint: FoamyPalette.warning; selectsSection: "issues" }
+          StatBadge { width: parent.cellWidth; alwaysVisible: true; icon: "activity"; label: FoamyI18n.t("commits"); value: root.service && root.service.githubActivity.weekly ? root.service.githubActivity.weekly.commits : 0; tint: FoamyPalette.accent }
         }
+
+        // The contribution heatmap stays hidden: this popup is capped at 560px.
       }
+
       Item {
+        id: bandSpacer
         width: parent.width
         height: FoamyStyle.gapLarge
+        visible: root.section === "repos"
       }
-      Text {
-        id: statusWarning
-        visible: !!root.service && (root.service.lastError !== "" || root.sync.stale)
+
+      Column {
+        id: filterColumn
+        visible: root.section === "repos"
         x: FoamyStyle.padding
         width: parent.width - FoamyStyle.padding * 2
-        bottomPadding: FoamyStyle.gapLarge
+        spacing: FoamyStyle.gap
+
+        Row {
+          id: filterBar
+          width: parent.width
+          height: FoamyStyle.controlHeight
+          spacing: FoamyStyle.gapSmall
+          readonly property real captionWidth: FoamyStyle.unitWidth * 1.5
+          readonly property real selectWidth: FoamyStyle.unitWidth * 3.25
+
+          SafeTextField {
+            id: searchField
+            width: Math.max(0, parent.width - filterBar.captionWidth * 2 - filterBar.selectWidth * 2 - FoamyStyle.actionSize - parent.spacing * 5)
+            height: FoamyStyle.controlHeight
+            placeholderText: FoamyI18n.t("Search repositories…")
+            text: root.searchText
+            onTextEdited: root.searchText = text
+            onKeyPressed: function (event) {
+              // The panel key catcher is blocked while typing, so Escape must
+              // be handled here or the popup cannot be closed from the field.
+              if (event.key === Qt.Key_Escape) {
+                event.accepted = true
+                root.closeRequestedByView()
+              }
+            }
+          }
+          FoamyAction {
+            id: clearSearch
+            width: root.query !== "" ? FoamyStyle.actionSize : 0
+            height: FoamyStyle.actionSize
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.query !== ""
+            iconName: "x"
+            tooltipText: FoamyI18n.t("Clear search")
+            foreground: FoamyPalette.secondaryText
+            onClicked: {
+              root.searchText = ""
+              searchField.text = ""
+              searchField.focusInput()
+            }
+          }
+          Text {
+            id: filterLabel
+            width: filterBar.captionWidth
+            anchors.verticalCenter: parent.verticalCenter
+            text: FoamyI18n.t("Filter")
+            textFormat: Text.PlainText
+            color: FoamyPalette.secondaryText
+            font.family: FoamyStyle.fontFamily
+            font.pixelSize: FoamyStyle.font.caption
+          }
+          FoamyDropdown {
+            id: filterSelect
+            width: filterBar.selectWidth
+            height: FoamyStyle.controlHeight
+            showLabel: false
+            foreground: FoamyPalette.text
+            value: root.filterMode
+            options: [
+              { value: "all", label: FoamyI18n.t("All") },
+              { value: "local", label: FoamyI18n.t("Local") },
+              { value: "remote", label: FoamyI18n.t("Remote") },
+              { value: "cloned", label: FoamyI18n.t("Cloned") },
+              { value: "notCloned", label: FoamyI18n.t("Not cloned") }
+            ]
+            Accessible.name: filterLabel.text
+            onChanged: function (value) { root.filterMode = value }
+          }
+          Text {
+            id: sortLabel
+            width: filterBar.captionWidth
+            anchors.verticalCenter: parent.verticalCenter
+            text: FoamyI18n.t("Sort")
+            textFormat: Text.PlainText
+            color: FoamyPalette.secondaryText
+            font.family: FoamyStyle.fontFamily
+            font.pixelSize: FoamyStyle.font.caption
+          }
+          FoamyDropdown {
+            id: sortSelect
+            width: filterBar.selectWidth
+            height: FoamyStyle.controlHeight
+            showLabel: false
+            foreground: FoamyPalette.text
+            value: root.sortMode
+            options: [
+              { value: "updated", label: FoamyI18n.t("Updated") },
+              { value: "name", label: FoamyI18n.t("Name") },
+              { value: "created", label: FoamyI18n.t("Created") }
+            ]
+            Accessible.name: sortLabel.text
+            onChanged: function (value) { root.sortMode = value }
+          }
+        }
+
+        // Local status stays outside the filter row: it appears only when a
+        // repository actually has something to report.
+        Flow {
+          width: parent.width
+          visible: root.totals.aheadRepos > 0 || root.totals.behindRepos > 0 || root.totals.dirtyRepos > 0
+          spacing: FoamyStyle.gapSmall
+          StatBadge { icon: "arrow-up"; label: FoamyI18n.t("ahead"); value: root.totals.aheadRepos; tint: FoamyPalette.onSurface(FoamyPalette.success) }
+          StatBadge { icon: "arrow-down"; label: FoamyI18n.t("behind"); value: root.totals.behindRepos; tint: FoamyPalette.onSurface(FoamyPalette.info) }
+          StatBadge { icon: "pencil"; label: FoamyI18n.t("changed"); value: root.totals.dirtyRepos; tint: FoamyPalette.onSurface(FoamyPalette.warning) }
+        }
+      }
+
+      Item {
+        id: filterSpacer
+        width: parent.width
+        height: FoamyStyle.gap
+        visible: root.section === "repos"
+      }
+
+      Text {
+        id: statusWarning
+        visible: root.section === "repos" && !!root.service && (root.service.lastError !== "" || root.sync.stale)
+        x: FoamyStyle.padding
+        width: parent.width - FoamyStyle.padding * 2
+        bottomPadding: FoamyStyle.gap
         text: !root.service ? "" : root.service.lastError !== "" ? FoamyI18n.t(root.service.lastError) : root.lastSyncText + " · " + FoamyI18n.t("remote state may be stale")
         textFormat: Text.PlainText
         wrapMode: Text.WordWrap
         horizontalAlignment: Text.AlignLeft
-        color: root.service && root.service.lastError !== "" ? Commons.Color.urgent : FoamyPalette.onSurface(FoamyPalette.warning)
+        color: root.service && root.service.lastError !== "" ? FoamyPalette.onSurface(FoamyPalette.error) : FoamyPalette.onSurface(FoamyPalette.warning)
         font.family: FoamyStyle.fontFamily
         font.pixelSize: FoamyStyle.font.bodySmall
         Accessible.role: root.service && root.service.lastError !== "" ? Accessible.AlertMessage : Accessible.StaticText
       }
     }
 
-    delegate: Item {
-      id: rowItem
-      required property var modelData
-      required property int index
-      width: list.width
-      height: surface.height + FoamyStyle.gapTiny
-      RepositoryRow {
-        id: surface
-        x: FoamyStyle.gapLarge
-        width: parent.width - FoamyStyle.gapLarge * 2
-        repo: rowItem.modelData
-        rowIndex: rowItem.index
+    ListView {
+      id: list
+      visible: root.section === "repos"
+      width: parent.width
+      height: Math.max(0, mainColumn.height - fixedHeader.height)
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      interactive: contentHeight > height
+      model: root.editingSettings ? [] : root.displayRows
+      cacheBuffer: 0
+      reuseItems: true
+      FoamyWheelScroll {
+        id: wheel
+        target: list
+      }
+      ScrollBar.vertical: ScrollBar {
+        id: vbar
+        visible: list.interactive
+        policy: ScrollBar.AsNeeded
+        width: FoamyStyle.gap
+        padding: 1
+        contentItem: Rectangle {
+          implicitWidth: FoamyStyle.gap - 2
+          radius: FoamyStyle.pillRadius(width)
+          color: vbar.pressed ? FoamyPalette.accent : vbar.hovered ? FoamyPalette.text : FoamyPalette.secondaryText
+          opacity: vbar.active ? 0.9 : 0.45
+        }
+        background: Rectangle {
+          radius: FoamyStyle.pillRadius(width)
+          color: Qt.alpha(FoamyPalette.text, 0.06)
+        }
+      }
+      delegate: Loader {
+        id: rowLoader
+        required property var modelData
+        required property int index
+        width: list.width
+        sourceComponent: {
+          var k = modelData ? modelData.kind : ""
+          if (k === "local") return localRowComp
+          if (k === "localEmpty") return localEmptyComp
+          if (k === "remoteHeader") return remoteHeaderComp
+          if (k === "remoteError") return remoteErrorComp
+          if (k === "remoteEmpty") return remoteEmptyComp
+          if (k === "remote") return remoteRowComp
+          return null
+        }
+        // Inline components cannot see the delegate's id; hand them the row.
+        Binding {
+          when: rowLoader.item !== null
+          target: rowLoader.item
+          property: "rowData"
+          value: rowLoader.modelData
+        }
+      }
+
+      Component {
+        id: localRowComp
+        Item {
+          property var rowData: null
+          width: list.width
+          height: surface.height + FoamyStyle.gapTiny
+          RepositoryRow {
+            id: surface
+            x: FoamyStyle.gapLarge
+            width: parent.width - FoamyStyle.gapLarge * 2
+            repo: rowData ? rowData.repo : null
+            rowIndex: rowData ? rowData.localIndex : -1
+          }
+        }
+      }
+      Component {
+        id: localEmptyComp
+        StateNote {
+          rowData: null
+          message: !root.service ? "" : root.query !== "" ? FoamyI18n.t("No local repositories match your search.") : root.service.lastError !== "" ? FoamyI18n.t("Local repository status is unavailable. Try Refresh again.") : root.service.lastChecked === 0 ? FoamyI18n.t("Checking local repositories…") : root.service.status.repoCount === 0 ? FoamyI18n.t("No local repositories found. Add a folder in Settings or clone from GitHub below.") : FoamyI18n.t("All local repositories are clean and match their upstream")
+        }
+      }
+      Component {
+        id: remoteErrorComp
+        StateNote {
+          rowData: null
+          error: true
+          message: root.githubError
+        }
+      }
+      Component {
+        id: remoteEmptyComp
+        StateNote {
+          rowData: null
+          message: root.query !== "" ? FoamyI18n.t("No GitHub repositories match your search.") : FoamyI18n.t("No GitHub repositories loaded. Check gh auth status or refresh.")
+        }
+      }
+      Component {
+        id: remoteHeaderComp
+        Item {
+          property var rowData: null
+          width: list.width - FoamyStyle.padding * 2
+          x: FoamyStyle.padding
+          height: FoamyStyle.gapLarge + heading.implicitHeight + FoamyStyle.gap
+          Row {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.topMargin: FoamyStyle.gapLarge
+            spacing: FoamyStyle.gapSmall
+            Text {
+              id: heading
+              anchors.verticalCenter: parent.verticalCenter
+              text: FoamyI18n.t("GitHub repositories")
+              textFormat: Text.PlainText
+              color: FoamyPalette.text
+              font.family: FoamyStyle.fontFamily
+              font.pixelSize: FoamyStyle.font.title
+              font.weight: Font.DemiBold
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              visible: !root.githubRefreshing && root.githubRows.length > 0
+              text: FoamyI18n.number(root.githubRows.length)
+              textFormat: Text.PlainText
+              color: FoamyPalette.mutedText
+              font.family: FoamyStyle.monoFamily
+              font.pixelSize: FoamyStyle.font.bodySmall
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.githubRefreshing
+              text: FoamyI18n.t("Loading…")
+              textFormat: Text.PlainText
+              color: FoamyPalette.secondaryText
+              font.family: FoamyStyle.fontFamily
+              font.pixelSize: FoamyStyle.font.caption
+            }
+          }
+          Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 1
+            color: FoamyPalette.divider
+          }
+        }
+      }
+      Component {
+        id: remoteRowComp
+        Item {
+          property var rowData: null
+          width: list.width
+          height: remoteRow.height
+          GithubRemoteRow {
+            id: remoteRow
+            width: parent.width
+            row: rowData ? rowData.row : null
+          }
+        }
       }
     }
 
-    footer: Column {
-      width: list.width
-      topPadding: FoamyStyle.gap
-      // the footer has its own, as in foamy-weather
-      bottomPadding: 0
-      spacing: FoamyStyle.gapLarge
-      Text {
-        visible: root.repos.length === 0
-        x: FoamyStyle.padding
-        width: parent.width - FoamyStyle.padding * 2
-        topPadding: FoamyStyle.gapLarge
-        bottomPadding: FoamyStyle.gapLarge
-        text: !root.service ? "" : root.service.lastError !== "" ? FoamyI18n.t("Local repository status is unavailable. Try Refresh again.") : root.service.lastChecked === 0 ? FoamyI18n.t("Checking local repositories…") : root.service.status.repoCount === 0 ? FoamyI18n.t("No local repositories found. Add a folder in Settings or clone from GitHub below.") : FoamyI18n.t("All local repositories are clean and match their upstream")
-        textFormat: Text.PlainText
-        wrapMode: Text.WordWrap
-        horizontalAlignment: Text.AlignLeft
-        color: FoamyPalette.mutedText
-        font.family: FoamyStyle.fontFamily
-        font.pixelSize: FoamyStyle.font.bodySmall
-      }
-
-      Column {
-        width: parent.width
-        topPadding: FoamyStyle.gapLarge
-        spacing: FoamyStyle.gapSmall
-
-        RowLayout {
-          x: FoamyStyle.padding
-          width: parent.width - FoamyStyle.padding * 2
-          spacing: FoamyStyle.gapSmall
-          Text {
-            Layout.fillWidth: true
-            text: FoamyI18n.t("GitHub repositories")
-            textFormat: Text.PlainText
-            color: FoamyPalette.text
-            font.family: FoamyStyle.fontFamily
-            font.pixelSize: FoamyStyle.font.title
-          }
-          Text {
-            visible: root.githubRefreshing
-            text: FoamyI18n.t("Loading…")
-            textFormat: Text.PlainText
-            color: FoamyPalette.secondaryText
-            font.family: FoamyStyle.fontFamily
-            font.pixelSize: FoamyStyle.font.caption
-          }
-        }
-
-        Text {
-          visible: root.githubError !== ""
-          x: FoamyStyle.padding
-          width: parent.width - FoamyStyle.padding * 2
-          text: root.githubError
-          textFormat: Text.PlainText
-          wrapMode: Text.WordWrap
-          color: FoamyPalette.onSurface(FoamyPalette.error)
-          font.family: FoamyStyle.fontFamily
-          font.pixelSize: FoamyStyle.font.bodySmall
-        }
-
-        Text {
-          visible: !root.githubRefreshing && root.githubError === "" && root.githubRows.length === 0
-          x: FoamyStyle.padding
-          width: parent.width - FoamyStyle.padding * 2
-          text: FoamyI18n.t("No GitHub repositories loaded. Check gh auth status or refresh.")
-          textFormat: Text.PlainText
-          wrapMode: Text.WordWrap
-          color: FoamyPalette.secondaryText
-          font.family: FoamyStyle.fontFamily
-          font.pixelSize: FoamyStyle.font.bodySmall
-        }
-
-        Repeater {
-          model: root.githubRows
-          delegate: GithubRemoteRow {
-            required property var modelData
-            width: list.width
-            row: modelData
-          }
-        }
-      }
-
-      FoamyPanelFooter {
-        objectName: "githubFooter"
-        width: parent.width
-        horizontalPadding: FoamyStyle.padding
-        source: FoamyI18n.t("%1 local · %2 GitHub", [FoamyI18n.number(root.service ? root.service.status.repoCount : 0), FoamyI18n.number(root.githubRows.length)])
-        status: root.service ? FoamyI18n.updatedAgo(root.service.lastChecked * 1000, root.now) : ""
-        statusTooltip: root.lastSyncText
-        refreshing: root.opened && !!root.service && (root.service.syncing || root.service.refreshing || root.service.githubRefreshing)
-        refreshEnabled: !root.busy
-        refreshTooltip: root.busy ? FoamyI18n.t("Refreshing…") : FoamyI18n.t("Fetch remotes and refresh")
-        refreshHasCursor: cursor.at(root.refreshStop)
-        onRefreshHovered: function (hovered) {
-          if (hovered)
-            cursor.hover(root.refreshStop)
-        }
-        onRefreshClicked: root.activate(root.refreshStop)
-      }
+    GithubItemsView {
+      id: itemsPage
+      visible: root.section !== "repos"
+      width: parent.width
+      height: Math.max(0, mainColumn.height - fixedHeader.height)
+      section: root.section
+      onBackRequested: root.setSection("repos")
     }
   }
 
@@ -549,27 +830,27 @@ PanelKeyCatcher {
       FoamyTextSettingField {
         width: parent.width
         label: FoamyI18n.t("Clone directory")
-        text: String(root.settings.cloneDirectory || "~/repos")
+        value: String(root.settings.cloneDirectory || "~/repos")
         placeholderText: "~/repos"
-        onSubmitted: function(value) { root.saveRequested("cloneDirectory", value) }
+        onCommitted: function(value) { root.saveRequested("cloneDirectory", value) }
       }
       FoamyNumberField {
         width: parent.width
         label: FoamyI18n.t("Refresh GitHub repositories every (minutes)")
         value: Number(root.settings.githubRefreshMinutes || 5)
-        min: 1
-        max: 120
-        step: 1
-        onSubmitted: function(value) { root.saveRequested("githubRefreshMinutes", value) }
+        from: 1
+        to: 120
+        stepSize: 1
+        onCommitted: function(value) { root.saveRequested("githubRefreshMinutes", value) }
       }
       FoamyNumberField {
         width: parent.width
         label: FoamyI18n.t("GitHub repositories to load")
         value: Number(root.settings.githubLimit || 100)
-        min: 1
-        max: 200
-        step: 1
-        onSubmitted: function(value) { root.saveRequested("githubLimit", value) }
+        from: 1
+        to: 200
+        stepSize: 1
+        onCommitted: function(value) { root.saveRequested("githubLimit", value) }
       }
     }
 
@@ -581,7 +862,7 @@ PanelKeyCatcher {
       Repeater {
         id: folderRepeater
         model: folderRows
-        RowLayout {
+        Column {
           id: folderRow
           required property int index
           required property string path
@@ -590,62 +871,84 @@ PanelKeyCatcher {
             folderPath.forceActiveFocus()
           }
           width: parent.width
-          spacing: FoamyStyle.gap
+          spacing: FoamyStyle.gapTiny
           enabled: !root.browsing && !root.foldersLocked
 
-          FoamyAction {
-            iconName: "folder"
-            focusable: true
-            tooltipText: FoamyI18n.t("Browse for folder")
-            foreground: FoamyPalette.secondaryText
-            onClicked: root.browseRequested(folderRow.index)
+          Text {
+            width: parent.width
+            text: FoamyI18n.t("Repository folder %1", [folderRow.index + 1])
+            textFormat: Text.PlainText
+            color: FoamyPalette.secondaryText
+            font.family: FoamyStyle.fontFamily
+            font.pixelSize: FoamyStyle.font.bodySmall
           }
-          SafeTextField {
-            id: folderPath
-            Layout.fillWidth: true
-            Layout.minimumWidth: 0
-            implicitHeight: FoamyStyle.controlHeight
-            text: folderRow.path
-            placeholderText: "~/Projects"
-            translate: FoamyI18n.t
-            Accessible.name: FoamyI18n.t("Repository folder %1", [folderRow.index + 1])
-            onPasteErrorChanged: if (pasteError !== "")
-              root.settingsErrorReported(pasteError)
-            onTextEdited: folderRows.setProperty(folderRow.index, "path", text)
-            onEditingFinished: root.foldersEdited(root.folderList())
-            onInputActiveFocusChanged: if (inputActiveFocus)
-              settingsPage.keepVisible(folderRow)
-          }
-          FoamyDropdown {
-            Layout.preferredWidth: Style.space(96)
-            showLabel: false
-            label: FoamyI18n.t("Scan levels for %1", [folderRow.path])
-            value: String(folderRow.depth)
-            options: [0, 1, 2, 3, 4, 5].map(function (depth) {
-              return {
-                value: String(depth),
-                label: FoamyI18n.tn("%1 levels", depth)
-              }
-            })
-            onChanged: function (value) {
-              folderRows.setProperty(folderRow.index, "depth", Number(value))
-              root.foldersEdited(root.folderList())
+          Row {
+            width: parent.width
+            height: FoamyStyle.controlHeight
+            spacing: FoamyStyle.gapSmall
+
+            FoamyAction {
+              width: FoamyStyle.actionSize
+              height: FoamyStyle.actionSize
+              anchors.verticalCenter: parent.verticalCenter
+              iconName: "folder"
+              focusable: true
+              tooltipText: FoamyI18n.t("Browse for folder")
+              foreground: FoamyPalette.secondaryText
+              onClicked: root.browseRequested(folderRow.index)
             }
-          }
-          FoamyAction {
-            iconName: "trash"
-            focusable: true
-            destructive: true
-            tooltipText: FoamyI18n.t("Remove folder")
-            foreground: FoamyPalette.secondaryText
-            onClicked: {
-              folderRows.remove(folderRow.index)
-              if (folderRows.count === 0)
-                folderRows.append({
-                  path: "",
-                  depth: 2
-                })
-              root.foldersEdited(root.folderList())
+            SafeTextField {
+              id: folderPath
+              width: Math.max(0, parent.width - FoamyStyle.actionSize * 2 - FoamyStyle.unitWidth * 3 - parent.spacing * 3)
+              implicitHeight: FoamyStyle.controlHeight
+              anchors.verticalCenter: parent.verticalCenter
+              text: folderRow.path
+              placeholderText: "~/Projects"
+              translate: FoamyI18n.t
+              Accessible.name: FoamyI18n.t("Repository folder %1", [folderRow.index + 1])
+              onPasteErrorChanged: if (pasteError !== "")
+                root.settingsErrorReported(pasteError)
+              onTextEdited: folderRows.setProperty(folderRow.index, "path", text)
+              onEditingFinished: root.foldersEdited(root.folderList())
+              onInputActiveFocusChanged: if (inputActiveFocus)
+                settingsPage.keepVisible(folderRow)
+            }
+            FoamyDropdown {
+              width: FoamyStyle.unitWidth * 3
+              height: FoamyStyle.controlHeight
+              anchors.verticalCenter: parent.verticalCenter
+              showLabel: false
+              label: FoamyI18n.t("Scan levels for %1", [folderRow.path])
+              value: String(folderRow.depth)
+              options: [0, 1, 2, 3, 4, 5].map(function (depth) {
+                return {
+                  value: String(depth),
+                  label: FoamyI18n.tn("%1 levels", depth)
+                }
+              })
+              onChanged: function (value) {
+                folderRows.setProperty(folderRow.index, "depth", Number(value))
+                root.foldersEdited(root.folderList())
+              }
+            }
+            FoamyAction {
+              width: FoamyStyle.actionSize
+              height: FoamyStyle.actionSize
+              anchors.verticalCenter: parent.verticalCenter
+              iconName: "trash"
+              focusable: true
+              destructive: true
+              tooltipText: FoamyI18n.t("Remove folder")
+              foreground: FoamyPalette.secondaryText
+              onClicked: {
+                folderRows.remove(folderRow.index)
+                if (folderRows.count === 0)
+                  folderRows.append({
+                    path: "",
+                    depth: 2
+                  })
+                root.foldersEdited(root.folderList())
+              }
             }
           }
         }
@@ -756,27 +1059,142 @@ PanelKeyCatcher {
   }
 
   // ---- components ---------------------------------------------------------------------
-  component SummaryCount: Row {
-    property int value: 0
-    property string label: ""
-    property string symbol: ""
-    property color tint: FoamyPalette.text
-    spacing: FoamyStyle.gapSmall
-    Text {
-      id: countValue
-      text: parent.symbol + " " + FoamyI18n.number(parent.value)
-      textFormat: Text.PlainText
-      color: parent.tint
-      font.family: FoamyStyle.fontFamily
-      font.pixelSize: FoamyStyle.font.heading
+  component StateNote: Rectangle {
+    id: stateNote
+    property var rowData: null
+    property string message: ""
+    property bool error: false
+    x: FoamyStyle.padding
+    width: list.width - FoamyStyle.padding * 2
+    height: noteText.implicitHeight + FoamyStyle.gapLarge * 2
+    radius: FoamyStyle.radiusSmall
+    color: FoamyPalette.noteFill
+    Rectangle {
+      width: 2
+      height: parent.height - FoamyStyle.gapLarge * 2
+      anchors.left: parent.left
+      anchors.leftMargin: FoamyStyle.gap
+      anchors.verticalCenter: parent.verticalCenter
+      radius: FoamyStyle.pillRadius(width)
+      visible: stateNote.error
+      color: FoamyPalette.onSurface(FoamyPalette.error)
     }
     Text {
-      text: parent.label
+      id: noteText
+      x: FoamyStyle.gapLarge
+      y: FoamyStyle.gapLarge
+      width: parent.width - FoamyStyle.gapLarge * 2
+      text: message
       textFormat: Text.PlainText
-      color: FoamyPalette.secondaryText
+      wrapMode: Text.WordWrap
+      color: stateNote.error ? FoamyPalette.onSurface(FoamyPalette.error) : FoamyPalette.secondaryText
       font.family: FoamyStyle.fontFamily
       font.pixelSize: FoamyStyle.font.bodySmall
-      anchors.baseline: countValue.baseline
+    }
+  }
+
+  component StatBadge: Rectangle {
+    id: badge
+    property string icon: ""
+    property string label: ""
+    property int value: 0
+    property color tint: FoamyPalette.text
+    property bool alwaysVisible: false
+    property string selectsSection: ""
+    objectName: badge.selectsSection ? badge.selectsSection + "Badge" : ""
+    visible: alwaysVisible || value > 0
+    radius: FoamyStyle.radiusSmall
+    color: Qt.alpha(tint, 0.12)
+    border.width: 1
+    border.color: Qt.alpha(tint, 0.22)
+    implicitHeight: badgeRow.implicitHeight + FoamyStyle.gapSmall * 2
+    implicitWidth: badgeRow.implicitWidth + FoamyStyle.gap * 2
+    Row {
+      id: badgeRow
+      anchors.centerIn: parent
+      spacing: FoamyStyle.gapSmall
+      FoamyIcon { name: icon; width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall; color: tint; anchors.verticalCenter: parent.verticalCenter }
+      Text { text: FoamyI18n.number(value); textFormat: Text.PlainText; color: tint; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.bodySmall; font.weight: Font.DemiBold }
+      Text { text: label; textFormat: Text.PlainText; color: FoamyPalette.secondaryText; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.caption }
+    }
+    MouseArea {
+      anchors.fill: parent
+      enabled: badge.selectsSection !== ""
+      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onClicked: root.setSection(badge.selectsSection)
+    }
+  }
+
+  component ContributionGraph: Column {
+    property var graph: null
+    spacing: FoamyStyle.gapSmall
+    readonly property var weeks: graph && graph.weeks ? graph.weeks : []
+    readonly property int total: graph ? Number(graph.total || 0) : 0
+
+    RowLayout {
+      width: parent.width
+      spacing: FoamyStyle.gapSmall
+      Text {
+        Layout.fillWidth: true
+        text: FoamyI18n.t("%1 contributions in the last year", [FoamyI18n.number(parent.parent.total)])
+        textFormat: Text.PlainText
+        color: FoamyPalette.secondaryText
+        font.family: FoamyStyle.fontFamily
+        font.pixelSize: FoamyStyle.font.caption
+      }
+      Row {
+        spacing: 3
+        Text { text: FoamyI18n.t("Less"); color: FoamyPalette.mutedText; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.caption; anchors.verticalCenter: parent.verticalCenter }
+        Repeater {
+          model: [0,1,2,3,4]
+          Rectangle {
+            required property int modelData
+            width: 8; height: 8; radius: 2
+            color: modelData === 0 ? Qt.alpha(FoamyPalette.text, 0.08)
+                 : modelData === 1 ? Qt.alpha(FoamyPalette.success, 0.28)
+                 : modelData === 2 ? Qt.alpha(FoamyPalette.success, 0.48)
+                 : modelData === 3 ? Qt.alpha(FoamyPalette.success, 0.72)
+                 : FoamyPalette.success
+          }
+        }
+        Text { text: FoamyI18n.t("More"); color: FoamyPalette.mutedText; font.family: FoamyStyle.fontFamily; font.pixelSize: FoamyStyle.font.caption; anchors.verticalCenter: parent.verticalCenter }
+      }
+    }
+
+    Flickable {
+      width: parent.width
+      height: heatGrid.implicitHeight
+      contentWidth: heatGrid.implicitWidth
+      clip: true
+      interactive: contentWidth > width
+      boundsBehavior: Flickable.StopAtBounds
+      Row {
+        id: heatGrid
+        spacing: 2
+        Repeater {
+          model: weeks
+          delegate: Column {
+            required property var modelData
+            spacing: 2
+            Repeater {
+              model: modelData
+              delegate: Rectangle {
+                required property var modelData
+                width: 8; height: 8; radius: 2
+                color: {
+                  var l = Number(modelData.level || 0)
+                  return l <= 0 ? Qt.alpha(FoamyPalette.text, 0.08)
+                       : l === 1 ? Qt.alpha(FoamyPalette.success, 0.28)
+                       : l === 2 ? Qt.alpha(FoamyPalette.success, 0.48)
+                       : l === 3 ? Qt.alpha(FoamyPalette.success, 0.72)
+                       : FoamyPalette.success
+                }
+
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -799,42 +1217,82 @@ PanelKeyCatcher {
       else bits.push(FoamyI18n.t("Not cloned"))
       return bits.join(" · ")
     }
-    height: remoteContent.implicitHeight + FoamyStyle.rowPadding * 2
+    // Plain Rows/Columns: a RowLayout here polishes in a loop when GitHub data
+    // refreshes, which freezes the shell.
+    height: FoamyStyle.rowPadding * 2 + Math.max(FoamyStyle.controlHeight,
+      titleText.implicitHeight + (descText.visible ? descText.implicitHeight + FoamyStyle.gapTiny : 0)
+      + FoamyStyle.gapTiny + metaText.implicitHeight)
     hasCursor: false
 
-    RowLayout {
+    Row {
       id: remoteContent
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.topMargin: FoamyStyle.rowPadding
-      anchors.leftMargin: FoamyStyle.rowPadding
-      anchors.rightMargin: FoamyStyle.gapSmall
+      x: FoamyStyle.rowPadding
+      y: FoamyStyle.rowPadding
+      width: parent.width - FoamyStyle.rowPadding - FoamyStyle.gapSmall
+      height: parent.height - FoamyStyle.rowPadding * 2
       spacing: FoamyStyle.rowPadding
 
       Rectangle {
-        Layout.preferredWidth: 2
-        Layout.preferredHeight: FoamyStyle.controlHeight
+        id: stateBar
+        width: 2
+        height: FoamyStyle.controlHeight
+        anchors.verticalCenter: parent.verticalCenter
         radius: FoamyStyle.pillRadius(width)
         color: !remote ? FoamyPalette.secondaryText : cloned ? (local && local.dirtyCount > 0 ? FoamyPalette.warning : FoamyPalette.success) : FoamyPalette.info
       }
 
-      ColumnLayout {
-        Layout.fillWidth: true
-        Layout.minimumWidth: 0
+      Column {
+        id: details
+        width: Math.max(0, parent.width - stateBar.width - actions.width - parent.spacing * 2)
+        anchors.verticalCenter: parent.verticalCenter
         spacing: FoamyStyle.gapTiny
-        Text {
-          Layout.fillWidth: true
-          text: remote ? String(remote.nameWithOwner) : ""
-          textFormat: Text.PlainText
-          elide: Text.ElideRight
-          color: FoamyPalette.text
-          font.family: FoamyStyle.fontFamily
-          font.pixelSize: FoamyStyle.font.title
+        Row {
+          width: parent.width
+          height: titleText.implicitHeight
+          Text {
+            id: titleText
+            width: Math.max(0, parent.width - (privateIcon.visible ? privateIcon.width : 0)
+              - (forkIcon.visible ? forkIcon.width : 0) - (archiveIcon.visible ? archiveIcon.width : 0)
+              - (privateIcon.visible ? parent.spacing : 0) - (forkIcon.visible ? parent.spacing : 0)
+              - (archiveIcon.visible ? parent.spacing : 0))
+            anchors.verticalCenter: parent.verticalCenter
+            text: remote ? String(remote.nameWithOwner) : ""
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: FoamyPalette.text
+            font.family: FoamyStyle.fontFamily
+            font.pixelSize: FoamyStyle.font.title
+            font.weight: Font.DemiBold
+          }
+          FoamyIcon {
+            id: privateIcon
+            visible: !!remote && remote.isPrivate
+            name: "lock"
+            width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall
+            color: FoamyPalette.info
+            anchors.verticalCenter: parent.verticalCenter
+          }
+          FoamyIcon {
+            id: forkIcon
+            visible: !!remote && remote.isFork
+            name: "git-fork"
+            width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall
+            color: FoamyPalette.secondaryText
+            anchors.verticalCenter: parent.verticalCenter
+          }
+          FoamyIcon {
+            id: archiveIcon
+            visible: !!remote && remote.isArchived
+            name: "archive"
+            width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall
+            color: FoamyPalette.mutedText
+            anchors.verticalCenter: parent.verticalCenter
+          }
         }
         Text {
+          id: descText
           visible: !!remote && String(remote.description || "") !== ""
-          Layout.fillWidth: true
+          width: parent.width
           text: remote ? String(remote.description || "") : ""
           textFormat: Text.PlainText
           elide: Text.ElideRight
@@ -843,20 +1301,34 @@ PanelKeyCatcher {
           font.family: FoamyStyle.fontFamily
           font.pixelSize: FoamyStyle.font.bodySmall
         }
-        Text {
-          Layout.fillWidth: true
-          text: remoteRow.meta
-          textFormat: Text.PlainText
-          elide: Text.ElideRight
-          color: FoamyPalette.secondaryText
-          font.family: FoamyStyle.fontFamily
-          font.pixelSize: FoamyStyle.font.bodySmall
+        Row {
+          width: parent.width
+          height: Math.max(metaIcon.height, metaText.implicitHeight)
+          FoamyIcon {
+            id: metaIcon
+            name: remoteRow.cloned ? "check" : "download"
+            width: FoamyStyle.font.bodySmall; height: FoamyStyle.font.bodySmall
+            color: remoteRow.cloned ? FoamyPalette.success : FoamyPalette.secondaryText
+            anchors.verticalCenter: parent.verticalCenter
+          }
+          Text {
+            id: metaText
+            width: Math.max(0, parent.width - metaIcon.width - parent.spacing)
+            anchors.verticalCenter: parent.verticalCenter
+            text: remoteRow.meta
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: FoamyPalette.secondaryText
+            font.family: FoamyStyle.fontFamily
+            font.pixelSize: FoamyStyle.font.bodySmall
+          }
         }
       }
 
       Row {
-        spacing: FoamyStyle.gapTiny
-        Layout.alignment: Qt.AlignVCenter
+        id: actions
+        spacing: FoamyStyle.gapSmall
+        anchors.verticalCenter: parent.verticalCenter
         FoamyAction {
           iconName: "external-link"
           tooltipText: FoamyI18n.t("Open on GitHub")
@@ -1070,7 +1542,7 @@ PanelKeyCatcher {
       }
 
       Row {
-        spacing: FoamyStyle.gapTiny
+        spacing: FoamyStyle.gapSmall
         Layout.alignment: Qt.AlignVCenter
         FoamyAction {
           iconName: "arrow-up"

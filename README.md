@@ -16,7 +16,7 @@ xdg-desktop-portal (standard on Omarchy; the helper asks it over the session
 bus).
 
 ```sh
-omarchy plugin add /home/msandredev/.config/omarchy/plugins/msandredev.github --enable
+omarchy plugin add ~/.config/omarchy/plugins/msandredev.github --enable
 ```
 
 ## Use
@@ -29,6 +29,8 @@ omarchy plugin add /home/msandredev/.config/omarchy/plugins/msandredev.github --
    pull arrow would: behind, with no local changes and nothing to push. It shows only when
    there is something to pull. They are pulled one at a time; the title shows the count pulled
    and anything that failed.
+6. Click the **open PRs** or **open issues** badge to list those items from `gh search`; click a
+   row to open it on GitHub. Click the active badge again, press Backspace or Left/h to return.
 
 The popup lists repositories that need attention: ahead, behind, changed, or
 whose last fetch failed. A failed fetch is shown on the repository's row, in
@@ -40,7 +42,8 @@ the last remote sync), and Refresh, which spins while a fetch runs.
 Keyboard: arrows or `hjkl` move one cursor through the rows, Pull all (when shown), Settings
 and Refresh (hovering moves the same cursor); Enter activates; `r` refreshes;
 `p` pulls all; `s` opens Settings; Esc closes (or leaves Settings); Tab and Shift+Tab move to
-the next bar panel.
+the next bar panel. On the PR/issues list, Up/Down or j/k move through items, Enter opens the
+selected one, and Backspace or Left/h goes back to repositories.
 IPC: `omarchy-shell msandredev.github open|close|toggle|settings|refresh|status`
 (`refresh` fetches remotes and answers `ok` when the fetch started, else
 `busy`, `offline` or `unavailable` when the helper can't run on this CPU;
@@ -399,14 +402,14 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 FOAMY_HELPER='["bin/aarch64/foamy-github-helper"]' python3 -m unittest discover -s tests -p 'test_*.py'
 bash tests/stress.sh                               # the unit suite, 40 runs, 4 at a time
 bash tests/kit-check.sh
-python3 ~/GitHub/Personal/foamy-kit/preview/i18n_runtime.py .   # live language switching (the kit's catalog check)
+python3 <foamy-kit>/preview/i18n_runtime.py .                   # live language switching (the kit's catalog check)
 python3 tests/runtime-panel.py                     # offscreen on 4.5, needs foamy-kit
 python3 tests/runtime-pullall.py                   # Pull all over local Git repositories
 python3 tests/runtime-watcher.py                   # a failing watcher's stderr: fake helper, bounded
 python3 tests/runtime-stale-status.py              # a status check overtaken by a trust change is redone
 python3 tests/runtime-lifecycle.py                 # helper jobs across unload, trust edits and IPC refresh (fake helper, fake NetworkManager)
 python3 tests/runtime-stored.py                    # an invalid folder or trust list in shell.json is named and kept
-~/GitHub/Personal/foamy-kit/preview/render.py .
+<foamy-kit>/preview/render.py .
 ```
 
 The runtime tests and the preview target Omarchy 4.5, the installed

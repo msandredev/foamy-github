@@ -41,6 +41,10 @@ Item {
   property bool githubRefreshing: false
   property string githubError: ""
   property string githubActionStatus: ""
+  property var githubStats: ({ repoCount: 0, openPRs: 0, openIssues: 0 })
+  property bool githubStatsRefreshing: false
+  property var githubActivity: ({ calendar: null, weekly: null, login: "" })
+  property bool githubActivityRefreshing: false
   readonly property string homeDir: Quickshell.env("HOME") || ""
   readonly property bool githubEnabled: preferences.githubEnabled !== false
   readonly property int githubRefreshMinutes: Math.max(1, Number(preferences.githubRefreshMinutes || 5))
@@ -471,12 +475,22 @@ Item {
   }
 
   function refreshGithub() {
-    if (!root.active || !root.githubEnabled || githubProcess.running) return
-    githubRefreshing = true
-    githubError = ""
-    githubProcess.command = ["gh", "repo", "list", "--limit", String(root.githubLimit),
-      "--json", "name,nameWithOwner,owner,description,url,sshUrl,isPrivate,isFork,isArchived,pushedAt,viewerCanPush"]
-    githubProcess.running = true
+    if (!root.active || !root.githubEnabled) return
+    if (!githubProcess.running) {
+      githubRefreshing = true
+      githubError = ""
+      githubProcess.command = ["gh", "repo", "list", "--limit", String(root.githubLimit),
+        "--json", "name,nameWithOwner,owner,description,url,sshUrl,isPrivate,isFork,isArchived,pushedAt,createdAt,updatedAt,viewerPermission"]
+      githubProcess.running = true
+    }
+    refreshGithubStats()
+  }
+
+  function refreshGithubStats() {
+    if (!root.active || !root.githubEnabled || githubStatsProcess.running) return
+    githubStatsRefreshing = true
+    githubStatsProcess.command = ["gh", "api", "graphql", "-f", "query={ viewer { login repositories(ownerAffiliations: OWNER, first: 1) { totalCount } pullRequests(states: OPEN) { totalCount } issues(states: OPEN) { totalCount } contributionsCollection { totalCommitContributions contributionCalendar { totalContributions weeks { contributionDays { date contributionCount contributionLevel } } } } } } }"]
+    githubStatsProcess.running = true
   }
 
   function cloneGithubRepo(remote) {
@@ -677,6 +691,41 @@ Item {
         root.githubError = detail
         root.githubStatus = { ok: false, error: detail, repos: root.githubRepos, lastChecked: root.githubStatus.lastChecked || 0 }
       }
+    }
+  }
+
+  Process {
+    id: githubStatsProcess
+    stdout: StdioCollector { id: githubStatsOutput; waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function (exitCode) {
+      root.githubStatsRefreshing = false
+      if (!root.active || exitCode !== 0) return
+      try {
+        var payload = JSON.parse(String(githubStatsOutput.text || "{}"))
+        var viewer = payload && payload.data && payload.data.viewer ? payload.data.viewer : null
+        if (!viewer) return
+        root.githubStats = {
+          repoCount: Number(viewer.repositories && viewer.repositories.totalCount || 0),
+          openPRs: Number(viewer.pullRequests && viewer.pullRequests.totalCount || 0),
+          openIssues: Number(viewer.issues && viewer.issues.totalCount || 0)
+        }
+        var cc = viewer.contributionsCollection || {}
+        var cal = cc.contributionCalendar || {}
+        var weeks = Array.isArray(cal.weeks) ? cal.weeks : []
+        var parsedWeeks = weeks.map(function(w) {
+          return (w.contributionDays || []).map(function(d) {
+            var lvl = String(d.contributionLevel || "")
+            var level = lvl.indexOf("FOURTH") !== -1 ? 4 : lvl.indexOf("THIRD") !== -1 ? 3 : lvl.indexOf("SECOND") !== -1 ? 2 : lvl.indexOf("FIRST") !== -1 ? 1 : 0
+            return { date: String(d.date || ""), count: Number(d.contributionCount || 0), level: level }
+          })
+        })
+        root.githubActivity = {
+          login: String(viewer.login || ""),
+          weekly: { commits: Number(cc.totalCommitContributions || 0) },
+          calendar: { total: Number(cal.totalContributions || 0), weeks: parsedWeeks }
+        }
+      } catch (e) {}
     }
   }
 

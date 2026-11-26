@@ -294,7 +294,9 @@ function parseGithubRepos(raw) {
         isFork: item.isFork === true,
         isArchived: item.isArchived === true,
         pushedAt: String(item.pushedAt || ""),
-        viewerCanPush: item.viewerCanPush !== false
+        createdAt: String(item.createdAt || ""),
+        updatedAt: String(item.updatedAt || ""),
+        viewerCanPush: item.viewerCanPush === true || ["ADMIN","MAINTAIN","WRITE"].indexOf(String(item.viewerPermission || "")) !== -1
       })
     }
     return { ok: true, error: "", repos: repos }
